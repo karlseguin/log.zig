@@ -35,7 +35,13 @@ pub const Kv = struct {
 		self.stringSafe("@l", level);
 	}
 
-	pub fn string(self: *Self, key: []const u8, value: []const u8) void {
+	pub fn string(self: *Self, key: []const u8, nvalue: ?[]const u8) void {
+		if (nvalue == null) {
+			self.writeNull(key);
+			return;
+		}
+
+		const value = nvalue.?;
 		const originalPos = self.pos;
 		if (!self.writeKeyForValue(key, value.len)) return;
 
@@ -97,12 +103,15 @@ pub const Kv = struct {
 	}
 
 	// cases where the caller is sure value does not need to be encoded
-	pub fn stringSafe(self: *Self, key: []const u8, value: []const u8) void {
-		if (!self.writeKeyForValue(key, value.len)) return;
-
-		var pos = self.pos;
-		mem.copy(u8, self.buf[pos..], value);
-		self.pos = pos + value.len;
+	pub fn stringSafe(self: *Self, key: []const u8, value: ?[]const u8) void {
+		if (value) |v| {
+			if (!self.writeKeyForValue(key, v.len)) return;
+			var pos = self.pos;
+			mem.copy(u8, self.buf[pos..], v);
+			self.pos = pos + v.len;
+		} else {
+			self.writeNull(key);
+		}
 	}
 
 	pub fn int(self: *Self, key: []const u8, value: anytype) void {
@@ -148,14 +157,19 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn binary(self: *Self, key: []const u8, value: []const u8) void {
-		const enc_len = b64.calcSize(value.len);
-		if (!self.writeKeyForValue(key, enc_len)) return;
+	pub fn binary(self: *Self, key: []const u8, value: ?[]const u8) void {
+		if (value) |v| {
+			const enc_len = b64.calcSize(v.len);
+			if (!self.writeKeyForValue(key, enc_len)) return;
 
-		// base64 encoded value never requires escaping, yay.
-		const pos = self.pos;
-		_ = b64.encode(self.buf[pos..], value);
-		self.pos = pos + enc_len;
+			// base64 encoded value never requires escaping, yay.
+			const pos = self.pos;
+			_ = b64.encode(self.buf[pos..], v);
+			self.pos = pos + enc_len;
+		} else {
+			self.writeNull(key);
+		}
+
 	}
 
 	pub fn err(self: *Self, key: []const u8, value: anyerror) void {
@@ -329,6 +343,17 @@ test "kv: string" {
 		try kv.logTo(out.writer());
 		try t.expectString("key=\"the val\\\"ue\"\n", out.items);
 	}
+
+	{
+		// null string
+		out.clearRetainingCapacity();
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.string("key", @as(?[]const u8, null));
+		try kv.logTo(out.writer());
+		try t.expectString("key=null\n", out.items);
+	}
 }
 
 test "kv: string buffer full" {
@@ -386,13 +411,23 @@ test "kv: binary" {
 	defer out.deinit();
 
 	{
-		// normal strings
 		var kv = pool.acquire() orelse unreachable;
 		defer pool.release(kv);
 
 		kv.binary("key", &[_]u8{9, 200, 33, 0});
 		try kv.logTo(out.writer());
 		try t.expectString("key=CcghAA\n", out.items);
+	}
+
+	{
+		// null
+		out.clearRetainingCapacity();
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.binary("key", @as(?[]const u8, null));
+		try kv.logTo(out.writer());
+		try t.expectString("key=null\n", out.items);
 	}
 }
 

@@ -30,7 +30,7 @@ pub const Logger = struct {
 
 	const Self = @This();
 
-	pub fn string(self: Self, key: []const u8, value: []const u8) Self {
+	pub fn string(self: Self, key: []const u8, value: ?[]const u8) Self {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.string(key, value),
@@ -38,7 +38,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn stringSafe(self: Self, key: []const u8, value: []const u8) Self {
+	pub fn stringSafe(self: Self, key: []const u8, value: ?[]const u8) Self {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.stringSafe(key, value),
@@ -46,7 +46,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn binary(self: Self, key: []const u8, value: []const u8) Self {
+	pub fn binary(self: Self, key: []const u8, value: ?[]const u8) Self {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.binary(key, value),

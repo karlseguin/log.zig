@@ -54,16 +54,16 @@ The returned logger is NOT thread safe.
 
 ### Attributes
 The logger can log:
-* `string(key: []const u8, value: []const u8)`
+* `string(key: []const u8, value: ?[]const u8)`
 * `boolean(key: []const u8, value: ?boolean)`
 * `int(key: []const u8, value: ?any_int)`
 * `float(key: []const u8, value: ?any_float)`
-* `binary(key: []const u8, value: []const u8)`
+* `binary(key: []const u8, value: ?[]const u8)`
 * `err(key: []const u8, e: anyerror)`
 
 Binary values are url_base_64 encoded without padding.
 
-The logger also has a `stringSafe([]const u8, []const u8)` which can be used when the caller is sure that `value` does not require escaping.
+The logger also has a `stringSafe([]const u8, ?[]const u8)` which can be used when the caller is sure that `value` does not require escaping.
 
 ### Log Level
 Pools are configured with a minimum log level:

@@ -78,6 +78,14 @@ pub const Logger = struct {
 		return self;
 	}
 
+	pub fn err(self: Self, key: []const u8, value: anyerror) Self {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.err(key, value),
+		}
+		return self;
+	}
+
 	pub fn log(self: Self) !void {
 		switch (self.inner) {
 			.noop => {},
@@ -141,4 +149,3 @@ pub fn logger() Logger {
 test {
 	std.testing.refAllDecls(@This());
 }
-

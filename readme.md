@@ -54,11 +54,12 @@ The returned logger is NOT thread safe.
 
 ### Attributes
 The logger can log:
-* `string([]const u8, []const u8)`
-* `boolean([]const u8, ?boolean)`
-* `int([]const u8, ?any_int)`
-* `float([]const u8, ?any_float)`
-* `binary([]const u8, []const u8)`
+* `string(key: []const u8, value: []const u8)`
+* `boolean(key: []const u8, value: ?boolean)`
+* `int(key: []const u8, value: ?any_int)`
+* `float(key: []const u8, value: ?any_float)`
+* `binary(key: []const u8, value: []const u8)`
+* `err(key: []const u8, e: anyerror)`
 
 Binary values are url_base_64 encoded without padding.
 

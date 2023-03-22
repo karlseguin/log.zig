@@ -158,6 +158,21 @@ pub const Kv = struct {
 		self.pos = pos + enc_len;
 	}
 
+	pub fn err(self: *Self, key: []const u8, value: anyerror) void {
+		const T = @TypeOf(value);
+
+		switch (@typeInfo(T)) {
+			.Optional => {
+				if (value) |v| {
+					self.string(key, @errorName(v));
+				} else {
+					self.writeNull(key);
+				}
+			},
+			else => self.string(key, @errorName(value)),
+		}
+	}
+
 	pub fn log(self: *Self) !void {
 		try self.logTo(self.out);
 	}
@@ -676,4 +691,25 @@ test "kv: float buffer full" {
 		try kv.logTo(out.writer());
 		try t.expectString("a=1\n", out.items);
 	}
+}
+
+
+test "kv: error" {
+	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
+	defer pool.deinit();
+
+	var out = std.ArrayList(u8).init(t.allocator);
+	try out.ensureTotalCapacity(100);
+	defer out.deinit();
+
+	{
+		// normal strings
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.err("err", error.FileNotFound);
+		try kv.logTo(out.writer());
+		try t.expectString("err=FileNotFound\n", out.items);
+	}
+
 }

@@ -97,6 +97,13 @@ pub const Logger = struct {
 			}
 		}
 	}
+
+	pub fn release(self: Self) void {
+		switch (self.inner) {
+			.noop => {},
+			.kv => |kv| self.pool.release(kv),
+		}
+	}
 };
 
 pub fn level() Level {
@@ -134,3 +141,4 @@ pub fn logger() Logger {
 test {
 	std.testing.refAllDecls(@This());
 }
+

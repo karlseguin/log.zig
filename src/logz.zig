@@ -109,7 +109,10 @@ pub const Logger = struct {
 	pub fn release(self: Self) void {
 		switch (self.inner) {
 			.noop => {},
-			.kv => |kv| self.pool.release(kv),
+			.kv => |kv| {
+				kv.reset();
+				self.pool.release(kv);
+			},
 		}
 	}
 };

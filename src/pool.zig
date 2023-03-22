@@ -91,7 +91,6 @@ pub const Pool = struct {
 			allocator.destroy(l);
 			return;
 		}
-		l.reset();
 		loggers[available] = l;
 		self.available = available + 1;
 		m.unlock();
@@ -402,6 +401,41 @@ test "pool: log to kv" {
 	}
 }
 
-test "pool: log to noop" {
+test "pool: prefix" {
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
 
+	var p = try Pool.init(t.allocator, .{.pool_size = 2, .max_size = 100, .prefix = "Keemun"});
+	defer p.deinit();
+
+	// we want to make sure dynamically allocated loggers also get the prefix
+	var l1 = p.info().int("id", 1);
+	var l2 = p.info().int("id", 2);
+	var l3 = p.info().int("id", 3);
+
+	try l1.logTo(out.writer());
+	try t.expectString("Keemun @ts=", out.items[0..11]);
+	try t.expectString("@l=INFO id=1\n", out.items[25..]);
+
+	out.clearRetainingCapacity();
+	try l2.logTo(out.writer());
+	try t.expectString("Keemun @ts=", out.items[0..11]);
+	try t.expectString("@l=INFO id=2\n", out.items[25..]);
+
+	out.clearRetainingCapacity();
+	try l3.logTo(out.writer());
+	try t.expectString("Keemun @ts=", out.items[0..11]);
+	try t.expectString("@l=INFO id=3\n", out.items[25..]);
+
+	// and the prefix remains after being released and re-acquired
+	out.clearRetainingCapacity();
+	try p.info().int("id", 4).logTo(out.writer());
+	try t.expectString("Keemun @ts=", out.items[0..11]);
+	try t.expectString("@l=INFO id=4\n", out.items[25..]);
+
+
+	out.clearRetainingCapacity();
+	try p.info().int("id", 5).logTo(out.writer());
+	try t.expectString("Keemun @ts=", out.items[0..11]);
+	try t.expectString("@l=INFO id=5\n", out.items[25..]);
 }

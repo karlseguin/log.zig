@@ -13,13 +13,25 @@ pub const Kv = struct {
 	buf: []u8,
 	pos: usize,
 	out: File,
+	prefix_length: usize,
 
 	const Self = @This();
 
 	pub fn init(self: *Self, allocator: Allocator, config: Config) !void {
-		self.pos = 0;
+		const buf = try allocator.alloc(u8, config.max_size);
+
+		var prefix_length: usize = 0;
+		if (config.prefix) |prefix| {
+			prefix_length = prefix.len;
+			for (prefix, 0..) |b, i| {
+				buf[i] = b;
+			}
+		}
+
+		self.buf = buf;
+		self.prefix_length = prefix_length;
+		self.pos = prefix_length;
 		self.out = std.io.getStdOut();
-		self.buf = try allocator.alloc(u8, config.max_size);
 	}
 
 	pub fn deinit(self: *Self, allocator: Allocator) void {
@@ -27,7 +39,7 @@ pub const Kv = struct {
 	}
 
 	pub fn reset(self: *Self) void {
-		self.pos = 0;
+		self.pos = self.prefix_length;
 	}
 
 	pub fn start(self: *Self, level: []const u8) void {
@@ -201,6 +213,7 @@ pub const Kv = struct {
 			try out.writeAll(buf[0..pos]);
 			try out.writeAll("\n");
 		}
+		self.reset();
 	}
 
 	fn writeInt(self: *Self, key: []const u8, value: anytype) void {

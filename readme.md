@@ -129,7 +129,7 @@ pub const Config = struct {
 ### Timestamp and Level
 When using the `debug`, `info`, `warn`, `err` or `fatal` functions, logs will always begin with `@ts=$MILLISECONDS_SINCE_JAN1_1970_UTC @l=$LEVEL`, such as: `@ts=1679473882025 @l=INFO`.
 
-The `pool.logger()` function returns a logger without this prefix and regardless of what configured log level.
+The `pool.logger()` function returns a logger without this prefix and regardless of what the configured log level is.
 
 ### Logger Life cycle
 The logger is implicitly returned to the pool when `log` or `logTo` is called. In rare cases where `log` or `logTo` are not called, the logger must be explicitly released using its `release()` function:

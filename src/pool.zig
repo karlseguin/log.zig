@@ -48,14 +48,13 @@ pub const Pool = struct {
 	}
 
 	pub fn acquire(self: *Self) ?*Kv {
-		var m = self.mutex;
-		m.lock();
+		self.mutex.lock();
 
 		const loggers = self.loggers;
 		const available = self.available;
 		if (available == 0) {
 			// dont hold the lock over factory
-			m.unlock();
+			self.mutex.unlock();
 			const allocator = self.allocator;
 
 			var l = allocator.create(Kv) catch |e| {
@@ -74,18 +73,17 @@ pub const Pool = struct {
 		const index = available - 1;
 		const l = loggers[index];
 		self.available = index;
-		m.unlock();
+		self.mutex.unlock();
 		return l;
 	}
 
 	pub fn release(self: *Self, l: *Kv) void {
-		var m = self.mutex;
-		m.lock();
+		self.mutex.lock();
 
 		var loggers = self.loggers;
 		const available = self.available;
 		if (available == loggers.len) {
-			m.unlock();
+			self.mutex.unlock();
 			const allocator = self.allocator;
 			l.deinit(allocator);
 			allocator.destroy(l);
@@ -93,7 +91,7 @@ pub const Pool = struct {
 		}
 		loggers[available] = l;
 		self.available = available + 1;
-		m.unlock();
+		self.mutex.unlock();
 	}
 
 	pub fn debug(self: *Self) logz.Logger {

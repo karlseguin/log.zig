@@ -203,6 +203,13 @@ pub const Kv = struct {
 		try self.logTo(self.out);
 	}
 
+	pub fn logCanFail(self: *Self) void {
+		self.logTo(self.out) catch |e| {
+			const msg = "logz: Failed to write log. Log will be dropped. Error was: {}";
+			std.log.err(msg, .{e});
+		};
+	}
+
 	pub fn logTo(self: *Self, out: anytype) !void {
 		const pos = self.pos;
 		const buf = self.buf;

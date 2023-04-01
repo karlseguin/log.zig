@@ -96,6 +96,16 @@ pub const Logger = struct {
 		}
 	}
 
+	pub fn logCanFail(self: Self) void {
+		switch (self.inner) {
+			.noop => {},
+			.kv => |kv| {
+				kv.logCanFail();
+				self.pool.release(kv);
+			}
+		}
+	}
+
 	pub fn logTo(self: Self, out: anytype) !void {
 		switch (self.inner) {
 			.noop => {},

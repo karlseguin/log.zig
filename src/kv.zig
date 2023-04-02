@@ -181,7 +181,6 @@ pub const Kv = struct {
 		} else {
 			self.writeNull(key);
 		}
-
 	}
 
 	pub fn err(self: *Self, key: []const u8, value: anyerror) void {

@@ -4,13 +4,9 @@ pub fn build(b: *std.Build) !void {
 	const target = b.standardTargetOptions(.{});
 	const optimize = b.standardOptimizeOption(.{});
 
-	const lib = b.addStaticLibrary(.{
-		.name = "logz",
-		.root_source_file = .{ .path = "src/logz.zig" },
-		.target = target,
-		.optimize = optimize,
+	_ = b.addModule("logz", .{
+		.source_file = .{ .path = "logz.zig" },
 	});
-	lib.install();
 
 	const lib_test = b.addTest(.{
 		.root_source_file = .{ .path = "src/logz.zig" },

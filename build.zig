@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) !void {
 	const optimize = b.standardOptimizeOption(.{});
 
 	_ = b.addModule("logz", .{
-		.source_file = .{ .path = "logz.zig" },
+		.source_file = .{ .path = "src/logz.zig" },
 	});
 
 	const lib_test = b.addTest(.{

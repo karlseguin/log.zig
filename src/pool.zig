@@ -24,7 +24,7 @@ pub const Pool = struct {
 
 		for (0..size) |i| {
 			var kv = try allocator.create(Kv);
-			try kv.init(allocator, config);
+			kv.* = try Kv.init(allocator, config);
 			loggers[i] = kv;
 		}
 
@@ -57,24 +57,24 @@ pub const Pool = struct {
 			self.mutex.unlock();
 			const allocator = self.allocator;
 
-			var l = allocator.create(Kv) catch |e| {
+			var kv = allocator.create(Kv) catch |e| {
 				logDynamicAllocationFailure(e);
 				return null;
 			};
 
-			l.init(allocator, self.config) catch |e| {
-				allocator.destroy(l);
+			kv.* = Kv.init(allocator, self.config) catch |e| {
+				allocator.destroy(kv);
 				logDynamicAllocationFailure(e);
 				return null;
 			};
 
-			return l;
+			return kv;
 		}
 		const index = available - 1;
-		const l = loggers[index];
+		const kv = loggers[index];
 		self.available = index;
 		self.mutex.unlock();
-		return l;
+		return kv;
 	}
 
 	pub fn release(self: *Self, l: *Kv) void {
@@ -95,27 +95,27 @@ pub const Pool = struct {
 	}
 
 	pub fn debug(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Debug)) self.loggerWithLevel("DEBUG") else noop();
+		return if (self.shouldLog(.Debug)) self.loggerWithLevel("DEBUG") else logz.noop();
 	}
 
 	pub fn info(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Info)) self.loggerWithLevel("INFO") else noop();
+		return if (self.shouldLog(.Info)) self.loggerWithLevel("INFO") else logz.noop();
 	}
 
 	pub fn warn(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Warn)) self.loggerWithLevel("WARN") else noop();
+		return if (self.shouldLog(.Warn)) self.loggerWithLevel("WARN") else logz.noop();
 	}
 
 	pub fn err(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Error)) self.loggerWithLevel("ERROR") else noop();
+		return if (self.shouldLog(.Error)) self.loggerWithLevel("ERROR") else logz.noop();
 	}
 
 	pub fn fatal(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Fatal)) self.loggerWithLevel("FATAL") else noop();
+		return if (self.shouldLog(.Fatal)) self.loggerWithLevel("FATAL") else logz.noop();
 	}
 
 	pub fn logger(self: *Self) logz.Logger {
-		const kv = self.acquire() orelse return noop();
+		const kv = self.acquire() orelse return logz.noop();
 		return logz.Logger{.pool = self, .inner = .{.kv = kv}};
 	}
 
@@ -124,15 +124,11 @@ pub const Pool = struct {
 	}
 
 	fn loggerWithLevel(self: *Self, level: []const u8) logz.Logger {
-		var kv = self.acquire() orelse return noop();
+		var kv = self.acquire() orelse return logz.noop();
 		kv.start(level);
 		return logz.Logger{.pool = self, .inner = .{.kv = kv}};
 	}
 };
-
-fn noop() logz.Logger {
-	return .{.pool = undefined, .inner = .{.noop = {}}};
-}
 
 fn logDynamicAllocationFailure(err: anyerror) void {
 	const msg = "logz: logged pool is empty and we failed to dynamically allowcate a new loggger. Log will be dropped. Error was: {}";
@@ -424,14 +420,27 @@ test "pool: logger" {
 	}
 
 {
-		// delayed level
+		// delayed level, above min
 		out.clearRetainingCapacity();
+		min_config.level = .Warn;
 		var p = try Pool.init(t.allocator, min_config);
 		defer p.deinit();
 
-		var l = p.logger().string("hero", "teg").level(logz.Level.Fatal);
+		var l = p.logger().string("hero", "teg").level(logz.Level.Warn);
 		try l.logTo(out.writer());
-		try t.expectString("hero=teg @l=FATAL\n", out.items);
+		try t.expectString("hero=teg @l=WARN\n", out.items);
+	}
+
+{
+		// delayed level, under min
+		out.clearRetainingCapacity();
+		min_config.level = .Warn;
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		var l = p.logger().string("hero", "teg").level(logz.Level.Info);
+		try l.logTo(out.writer());
+		try t.expectString("", out.items);
 	}
 }
 

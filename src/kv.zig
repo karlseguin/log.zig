@@ -18,7 +18,7 @@ pub const Kv = struct {
 
 	const Self = @This();
 
-	pub fn init(self: *Self, allocator: Allocator, config: Config) !void {
+	pub fn init(allocator: Allocator, config: Config) !Kv {
 		const buf = try allocator.alloc(u8, config.max_size);
 
 		var prefix_length: usize = 0;
@@ -29,10 +29,12 @@ pub const Kv = struct {
 			}
 		}
 
-		self.buf = buf;
-		self.prefix_length = prefix_length;
-		self.pos = prefix_length;
-		self.out = std.io.getStdOut();
+		return .{
+			.buf = buf,
+			.prefix_length = prefix_length,
+			.pos = prefix_length,
+			.out = std.io.getStdOut(),
+		};
 	}
 
 	pub fn deinit(self: *Self, allocator: Allocator) void {
@@ -130,6 +132,14 @@ pub const Kv = struct {
 		self.pos = pos + 1;
 	}
 
+	pub fn stringZ(self: *Self, key: []const u8, nvalue: ?[*:0]const u8) void {
+		if (nvalue == null) {
+			self.writeNull(key);
+			return;
+		}
+		self.string(key, std.mem.span(nvalue));
+	}
+
 	// cases where the caller is sure value does not need to be encoded
 	pub fn stringSafe(self: *Self, key: []const u8, value: ?[]const u8) void {
 		if (value) |v| {
@@ -137,6 +147,15 @@ pub const Kv = struct {
 			var pos = self.pos;
 			mem.copy(u8, self.buf[pos..], v);
 			self.pos = pos + v.len;
+		} else {
+			self.writeNull(key);
+		}
+	}
+
+	// cases where the caller is sure value does not need to be encoded
+	pub fn stringSafeZ(self: *Self, key: []const u8, value: ?[*:0]const u8) void {
+		if (value) |v| {
+			self.stringSafe(key, std.mem.span(v));
 		} else {
 			self.writeNull(key);
 		}
@@ -226,6 +245,7 @@ pub const Kv = struct {
 	}
 
 	pub fn logTo(self: *Self, out: anytype) !void {
+
 		const pos = self.pos;
 		const buf = self.buf;
 		if (pos != buf.len) {
@@ -396,8 +416,7 @@ test "kv: string buffer full" {
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv: Kv = undefined;
-	try kv.init(t.allocator, .{.max_size = 20});
+	var kv = try Kv.init(t.allocator, .{.max_size = 20});
 	defer kv.deinit(t.allocator);
 
 	{
@@ -437,6 +456,93 @@ test "kv: string buffer full" {
 	}
 }
 
+test "kv: stringZ" {
+	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
+	defer pool.deinit();
+
+	var out = std.ArrayList(u8).init(t.allocator);
+	try out.ensureTotalCapacity(100);
+	defer out.deinit();
+
+	{
+		// normal strings
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.stringZ("key", "value");
+		kv.stringZ("other", "rehto");
+		try kv.logTo(out.writer());
+		try t.expectString("key=value other=rehto\n", out.items);
+	}
+
+	{
+		// string requiring encoding
+		out.clearRetainingCapacity();
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.stringZ("key", "the val\"ue");
+		try kv.logTo(out.writer());
+		try t.expectString("key=\"the val\\\"ue\"\n", out.items);
+	}
+
+	{
+		// null string
+		out.clearRetainingCapacity();
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.stringZ("key", @as(?[*:0]const u8, null));
+		try kv.logTo(out.writer());
+		try t.expectString("key=null\n", out.items);
+	}
+}
+
+test "kv: stringZ buffer full" {
+	var out = std.ArrayList(u8).init(t.allocator);
+	try out.ensureTotalCapacity(100);
+	defer out.deinit();
+
+	var kv = try Kv.init(t.allocator, .{.max_size = 20});
+	defer kv.deinit(t.allocator);
+
+	{
+		// key is too large
+		kv.stringZ("a", "abc");
+		kv.stringZ("areallyrealylongkey", "z");
+		try kv.logTo(out.writer());
+		try t.expectString("a=abc\n", out.items);
+	}
+
+	{
+		// value is too large
+		kv.reset();
+		out.clearRetainingCapacity();
+		kv.stringZ("aa", "z");
+		kv.stringZ("cc", "areallylongva");
+		try kv.logTo(out.writer());
+		try t.expectString("aa=z\n", out.items);
+	}
+
+	{
+		// escpace JUST fits
+		kv.reset();
+		out.clearRetainingCapacity();
+		kv.stringZ("a", "h\n it \"goes\"?");
+		try kv.logTo(out.writer());
+		try t.expectString("a=\"h\\n it \\\"goes\\\"?\"\n", out.items);
+	}
+
+	{
+		// escpace overflow by 1
+		kv.reset();
+		out.clearRetainingCapacity();
+		kv.stringZ("ab", "h\n it \"goes\"?");
+		try kv.logTo(out.writer());
+		try t.expectString("\n", out.items);
+	}
+}
+
 test "kv: binary" {
 	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
 	defer pool.deinit();
@@ -471,8 +577,7 @@ test "kv: binary buffer full" {
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv: Kv = undefined;
-	try kv.init(t.allocator, .{.max_size = 10});
+	var kv = try Kv.init(t.allocator, .{.max_size = 10});
 	defer kv.deinit(t.allocator);
 
 	{
@@ -583,8 +688,7 @@ test "kv: int buffer full" {
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv: Kv = undefined;
-	try kv.init(t.allocator, .{.max_size = 10});
+	var kv = try Kv.init(t.allocator, .{.max_size = 10});
 	defer kv.deinit(t.allocator);
 
 	{
@@ -647,8 +751,7 @@ test "kv: bool full" {
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv: Kv = undefined;
-	try kv.init(t.allocator, .{.max_size = 10});
+	var kv = try Kv.init(t.allocator, .{.max_size = 10});
 	defer kv.deinit(t.allocator);
 
 	{
@@ -740,8 +843,7 @@ test "kv: float buffer full" {
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv: Kv = undefined;
-	try kv.init(t.allocator, .{.max_size = 10});
+	var kv = try Kv.init(t.allocator, .{.max_size = 10});
 	defer kv.deinit(t.allocator);
 
 	{

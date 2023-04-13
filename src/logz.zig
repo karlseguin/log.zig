@@ -21,6 +21,12 @@ pub const Level = enum(u3) {
 	None,
 };
 
+pub const Debug = Level.Debug;
+pub const Info = Level.Info;
+pub const Warn = Level.Warn;
+pub const Error = Level.Error;
+pub const Fatal = Level.Fatal;
+
 pub const Logger = struct {
 	pool: *Pool,
 	inner: union(enum) {
@@ -38,10 +44,26 @@ pub const Logger = struct {
 		return self;
 	}
 
+	pub fn stringZ(self: Self, key: []const u8, value: ?[*:0]const u8) Self {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.stringZ(key, value),
+		}
+		return self;
+	}
+
 	pub fn stringSafe(self: Self, key: []const u8, value: ?[]const u8) Self {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.stringSafe(key, value),
+		}
+		return self;
+	}
+
+	pub fn stringSafeZ(self: Self, key: []const u8, value: ?[*:0]const u8) Self {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.stringSafeZ(key, value),
 		}
 		return self;
 	}
@@ -99,7 +121,10 @@ pub const Logger = struct {
 
 		switch (self.inner) {
 			.noop => {},
-			inline else => |l| l.level(lvl),
+			.kv => |kv| {
+				if (!self.pool.shouldLog(lvl)) return noop();
+				kv.level(lvl);
+			}
 		}
 		return self;
 	}
@@ -144,6 +169,10 @@ pub const Logger = struct {
 		}
 	}
 };
+
+pub fn noop() Logger {
+	return .{.pool = undefined, .inner = .{.noop = {}}};
+}
 
 pub fn level() Level {
 	return @intToEnum(Level, global.level);

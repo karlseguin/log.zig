@@ -55,6 +55,7 @@ The returned logger is NOT thread safe.
 ### Attributes
 The logger can log:
 * `string(key: []const u8, value: ?[]const u8)`
+* `stringZ(key: []const u8, value: ?[*:0]const u8)`
 * `boolean(key: []const u8, value: ?boolean)`
 * `int(key: []const u8, value: ?any_int)`
 * `float(key: []const u8, value: ?any_float)`
@@ -63,7 +64,7 @@ The logger can log:
 
 Binary values are url_base_64 encoded without padding.
 
-The logger also has a `stringSafe([]const u8, ?[]const u8)` which can be used when the caller is sure that `value` does not require escaping.
+The logger also has a `stringSafe(key []const u8, value ?[]const u8)` and `stringSafeZ(key []const u8, value ?[*:0]const u8)`` which can be used when the caller is sure that `value` does not require escaping.
 
 ### Log Level
 Pools are configured with a minimum log level:
@@ -136,13 +137,15 @@ The `pool.logger()` can be used for creating a log with a deferred level using t
 ```zig
 // A log message for running a migration, but we want the level to be dynamic
 var l = logz.logger().ts().string("ctx", "migration.start");
+defer l.log();
 
 doSomething() catch |err| {
-    l.level(logz.Level.Error).err(err).log()
+    l.level(logz.Error).err(err)
     return err;
 }
+
 ...
-log.level(logz.level.Info).log();
+l.level(logz.Info)
 ```
 
 ### Logger Life cycle

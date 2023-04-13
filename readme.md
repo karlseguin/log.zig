@@ -131,6 +131,20 @@ When using the `debug`, `info`, `warn`, `err` or `fatal` functions, logs will al
 
 The `pool.logger()` function returns a logger without this prefix and regardless of what the configured log level is.
 
+The `pool.logger()` can be used for creating a log with a deferred level using the `ts()` and `level(logz.Level)` functions to inject the `@ts=` and `@l=` attributes:
+
+```zig
+// A log message for running a migration, but we want the level to be dynamic
+var l = logz.logger().ts().string("ctx", "migration.start");
+
+doSomething() catch |err| {
+    l.level(logz.Level.Error).err(err).log()
+    return err;
+}
+...
+log.level(logz.level.Info).log();
+```
+
 ### Logger Life cycle
 The logger is implicitly returned to the pool when `log`, `logTo` or `logCanFail` is called. In rare cases where `log`, `logTo` or `logCanFail` are not called, the logger must be explicitly released using its `release()` function:
 

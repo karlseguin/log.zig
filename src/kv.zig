@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const t = @import("t.zig");
+const logz = @import("logz.zig");
 const Pool = @import("pool.zig").Pool;
 const Config = @import("config.zig").Config;
 
@@ -42,9 +43,24 @@ pub const Kv = struct {
 		self.pos = self.prefix_length;
 	}
 
-	pub fn start(self: *Self, level: []const u8) void {
+	pub fn start(self: *Self, lvl: []const u8) void {
+		self.ts();
+		self.stringSafe("@l", lvl);
+	}
+
+	pub fn ts(self: *Self) void {
 		self.writeInt("@ts", std.time.milliTimestamp());
-		self.stringSafe("@l", level);
+	}
+
+	pub fn level(self: *Self, lvl: logz.Level) void {
+		switch (lvl) {
+			.Debug => self.stringSafe("@l", "DEBUG"),
+			.Info => self.stringSafe("@l", "INFO"),
+			.Warn => self.stringSafe("@l", "WARN"),
+			.Error => self.stringSafe("@l", "ERROR"),
+			.Fatal => self.stringSafe("@l", "FATAL"),
+			else => unreachable,
+		}
 	}
 
 	pub fn string(self: *Self, key: []const u8, nvalue: ?[]const u8) void {
@@ -747,7 +763,6 @@ test "kv: float buffer full" {
 	}
 }
 
-
 test "kv: error" {
 	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
 	defer pool.deinit();
@@ -765,5 +780,4 @@ test "kv: error" {
 		try kv.logTo(out.writer());
 		try t.expectString("err=FileNotFound\n", out.items);
 	}
-
 }

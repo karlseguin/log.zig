@@ -399,6 +399,42 @@ test "pool: log to kv" {
 	}
 }
 
+test "pool: logger" {
+	var min_config = Config{.pool_size = 1, .max_size = 100};
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	{
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		try p.logger().string("hero", "teg").logTo(out.writer());
+		try t.expectString("hero=teg\n", out.items);
+	}
+
+	{
+		// delayed ts
+		out.clearRetainingCapacity();
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		var l = p.logger().string("hero", "teg").ts();
+		try l.logTo(out.writer());
+		try t.expectString("hero=teg @ts=", out.items[0..13]);
+	}
+
+{
+		// delayed level
+		out.clearRetainingCapacity();
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		var l = p.logger().string("hero", "teg").level(logz.Level.Fatal);
+		try l.logTo(out.writer());
+		try t.expectString("hero=teg @l=FATAL\n", out.items);
+	}
+}
+
 test "pool: prefix" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	defer out.deinit();

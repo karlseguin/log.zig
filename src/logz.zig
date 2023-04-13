@@ -86,6 +86,24 @@ pub const Logger = struct {
 		return self;
 	}
 
+	pub fn ts(self: Self) Self {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.ts(),
+		}
+		return self;
+	}
+
+	pub fn level(self: Self, lvl: Level) Self {
+		if (lvl == .None) return self;
+
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.level(lvl),
+		}
+		return self;
+	}
+
 	pub fn log(self: Self) !void {
 		switch (self.inner) {
 			.noop => {},

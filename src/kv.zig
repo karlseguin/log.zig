@@ -14,6 +14,7 @@ pub const Kv = struct {
 	buf: []u8,
 	pos: usize,
 	out: File,
+	lvl: logz.Level,
 	prefix_length: usize,
 
 	const Self = @This();
@@ -27,10 +28,15 @@ pub const Kv = struct {
 			for (prefix, 0..) |b, i| {
 				buf[i] = b;
 			}
+			if (buf[prefix_length] != ' ') {
+				buf[prefix_length] = ' ';
+				prefix_length += 1;
+			}
 		}
 
 		return .{
 			.buf = buf,
+			.lvl = .None,
 			.prefix_length = prefix_length,
 			.pos = prefix_length,
 			.out = std.io.getStdOut(),
@@ -42,27 +48,12 @@ pub const Kv = struct {
 	}
 
 	pub fn reset(self: *Self) void {
+		self.lvl = .None;
 		self.pos = self.prefix_length;
 	}
 
-	pub fn start(self: *Self, lvl: []const u8) void {
-		self.ts();
-		self.stringSafe("@l", lvl);
-	}
-
-	pub fn ts(self: *Self) void {
-		self.writeInt("@ts", std.time.milliTimestamp());
-	}
-
 	pub fn level(self: *Self, lvl: logz.Level) void {
-		switch (lvl) {
-			.Debug => self.stringSafe("@l", "DEBUG"),
-			.Info => self.stringSafe("@l", "INFO"),
-			.Warn => self.stringSafe("@l", "WARN"),
-			.Error => self.stringSafe("@l", "ERROR"),
-			.Fatal => self.stringSafe("@l", "FATAL"),
-			else => unreachable,
-		}
+		self.lvl = lvl;
 	}
 
 	pub fn string(self: *Self, key: []const u8, nvalue: ?[]const u8) void {
@@ -233,11 +224,11 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn log(self: *Self) !void {
+	pub fn tryLog(self: *Self) !void {
 		try self.logTo(self.out);
 	}
 
-	pub fn logCanFail(self: *Self) void {
+	pub fn log(self: *Self) void {
 		self.logTo(self.out) catch |e| {
 			const msg = "logz: Failed to write log. Log will be dropped. Error was: {}";
 			std.log.err(msg, .{e});
@@ -245,14 +236,51 @@ pub const Kv = struct {
 	}
 
 	pub fn logTo(self: *Self, out: anytype) !void {
-
 		const pos = self.pos;
 		const buf = self.buf;
+		const prefix_length = self.prefix_length;
+
+		if (prefix_length > 0) {
+			try out.writeAll(buf[0..prefix_length]);
+		}
+
+		var meta: [27]u8 = undefined;
+		mem.copy(u8, &meta, "@ts=");
+		_ = std.fmt.formatIntBuf(meta[4..], std.time.milliTimestamp(), 10, .lower, .{});
+
+		switch (self.lvl) {
+			.Debug => {
+				mem.copy(u8, meta[17..], " @l=DEBUG ");
+				try out.writeAll(&meta);
+			},
+			.Info => {
+				mem.copy(u8, meta[17..], " @l=INFO ");
+				try out.writeAll(meta[0..26]);
+			},
+			.Warn => {
+				mem.copy(u8, meta[17..], " @l=WARN ");
+				try out.writeAll(meta[0..26]);
+			},
+			.Error => {
+				mem.copy(u8, meta[17..], " @l=ERROR ");
+				try out.writeAll(&meta);
+			},
+			.Fatal => {
+				mem.copy(u8, meta[17..], " @l=FATAL ");
+				try out.writeAll(&meta);
+			},
+			else => {
+				meta[17] = ' ';
+				try out.writeAll(meta[0..18]);
+			},
+		}
+
+
 		if (pos != buf.len) {
 			buf[pos] = '\n';
-			try out.writeAll(buf[0..pos+1]);
+			try out.writeAll(buf[prefix_length..pos+1]);
 		} else {
-			try out.writeAll(buf[0..pos]);
+			try out.writeAll(buf[prefix_length..pos]);
 			try out.writeAll("\n");
 		}
 		self.reset();
@@ -264,7 +292,7 @@ pub const Kv = struct {
 
 		std.fmt.formatInt(value, 10, .lower, .{}, self) catch {
 			self.pos = rollback_position;
-	};
+		};
 	}
 
 	fn writeFloat(self: *Self, key: []const u8, value: anytype) void {
@@ -312,7 +340,7 @@ pub const Kv = struct {
 			return false;
 		}
 
-		if (pos != 0) {
+		if (pos > self.prefix_length) {
 			buf[pos] = ' ';
 			pos += 1;
 		}
@@ -385,7 +413,7 @@ test "kv: string" {
 		kv.string("key", "value");
 		kv.string("other", "rehto");
 		try kv.logTo(out.writer());
-		try t.expectString("key=value other=rehto\n", out.items);
+		try t.expectSuffix(out.items, "key=value other=rehto\n");
 	}
 
 	{
@@ -396,7 +424,7 @@ test "kv: string" {
 
 		kv.string("key", "the val\"ue");
 		try kv.logTo(out.writer());
-		try t.expectString("key=\"the val\\\"ue\"\n", out.items);
+		try t.expectSuffix(out.items, "key=\"the val\\\"ue\"\n");
 	}
 
 	{
@@ -407,7 +435,7 @@ test "kv: string" {
 
 		kv.string("key", @as(?[]const u8, null));
 		try kv.logTo(out.writer());
-		try t.expectString("key=null\n", out.items);
+		try t.expectSuffix(out.items, "key=null\n");
 	}
 }
 
@@ -424,7 +452,7 @@ test "kv: string buffer full" {
 		kv.string("a", "abc");
 		kv.string("areallyrealylongkey", "z");
 		try kv.logTo(out.writer());
-		try t.expectString("a=abc\n", out.items);
+		try t.expectSuffix(out.items, "a=abc\n");
 	}
 
 	{
@@ -434,7 +462,7 @@ test "kv: string buffer full" {
 		kv.string("aa", "z");
 		kv.string("cc", "areallylongva");
 		try kv.logTo(out.writer());
-		try t.expectString("aa=z\n", out.items);
+		try t.expectSuffix(out.items, "aa=z\n");
 	}
 
 	{
@@ -443,7 +471,7 @@ test "kv: string buffer full" {
 		out.clearRetainingCapacity();
 		kv.string("a", "h\n it \"goes\"?");
 		try kv.logTo(out.writer());
-		try t.expectString("a=\"h\\n it \\\"goes\\\"?\"\n", out.items);
+		try t.expectSuffix(out.items, "a=\"h\\n it \\\"goes\\\"?\"\n");
 	}
 
 	{
@@ -452,7 +480,7 @@ test "kv: string buffer full" {
 		out.clearRetainingCapacity();
 		kv.string("ab", "h\n it \"goes\"?");
 		try kv.logTo(out.writer());
-		try t.expectString("\n", out.items);
+		try t.expectSuffix(out.items, "\n");
 	}
 }
 
@@ -472,7 +500,7 @@ test "kv: stringZ" {
 		kv.stringZ("key", "value");
 		kv.stringZ("other", "rehto");
 		try kv.logTo(out.writer());
-		try t.expectString("key=value other=rehto\n", out.items);
+		try t.expectSuffix(out.items, "key=value other=rehto\n");
 	}
 
 	{
@@ -483,7 +511,7 @@ test "kv: stringZ" {
 
 		kv.stringZ("key", "the val\"ue");
 		try kv.logTo(out.writer());
-		try t.expectString("key=\"the val\\\"ue\"\n", out.items);
+		try t.expectSuffix(out.items, "key=\"the val\\\"ue\"\n");
 	}
 
 	{
@@ -494,7 +522,7 @@ test "kv: stringZ" {
 
 		kv.stringZ("key", @as(?[*:0]const u8, null));
 		try kv.logTo(out.writer());
-		try t.expectString("key=null\n", out.items);
+		try t.expectSuffix(out.items, "key=null\n");
 	}
 }
 
@@ -511,7 +539,7 @@ test "kv: stringZ buffer full" {
 		kv.stringZ("a", "abc");
 		kv.stringZ("areallyrealylongkey", "z");
 		try kv.logTo(out.writer());
-		try t.expectString("a=abc\n", out.items);
+		try t.expectSuffix(out.items, "a=abc\n");
 	}
 
 	{
@@ -521,7 +549,7 @@ test "kv: stringZ buffer full" {
 		kv.stringZ("aa", "z");
 		kv.stringZ("cc", "areallylongva");
 		try kv.logTo(out.writer());
-		try t.expectString("aa=z\n", out.items);
+		try t.expectSuffix(out.items, "aa=z\n");
 	}
 
 	{
@@ -530,7 +558,7 @@ test "kv: stringZ buffer full" {
 		out.clearRetainingCapacity();
 		kv.stringZ("a", "h\n it \"goes\"?");
 		try kv.logTo(out.writer());
-		try t.expectString("a=\"h\\n it \\\"goes\\\"?\"\n", out.items);
+		try t.expectSuffix(out.items, "a=\"h\\n it \\\"goes\\\"?\"\n");
 	}
 
 	{
@@ -539,7 +567,7 @@ test "kv: stringZ buffer full" {
 		out.clearRetainingCapacity();
 		kv.stringZ("ab", "h\n it \"goes\"?");
 		try kv.logTo(out.writer());
-		try t.expectString("\n", out.items);
+		try t.expectSuffix(out.items, "\n");
 	}
 }
 
@@ -557,7 +585,7 @@ test "kv: binary" {
 
 		kv.binary("key", &[_]u8{9, 200, 33, 0});
 		try kv.logTo(out.writer());
-		try t.expectString("key=CcghAA\n", out.items);
+		try t.expectSuffix(out.items, "key=CcghAA\n");
 	}
 
 	{
@@ -568,7 +596,7 @@ test "kv: binary" {
 
 		kv.binary("key", @as(?[]const u8, null));
 		try kv.logTo(out.writer());
-		try t.expectString("key=null\n", out.items);
+		try t.expectSuffix(out.items, "key=null\n");
 	}
 }
 
@@ -585,7 +613,7 @@ test "kv: binary buffer full" {
 		kv.int("a", 1);
 		kv.binary("toolong", &[_]u8{9, 200, 33, 0, 2});
 		try kv.logTo(out.writer());
-		try t.expectString("a=1\n", out.items);
+		try t.expectSuffix(out.items, "a=1\n");
 	}
 
 	{
@@ -595,7 +623,7 @@ test "kv: binary buffer full" {
 		kv.int("a", 43);
 		kv.binary("b", &[_]u8{9, 200, 0});
 		try kv.logTo(out.writer());
-		try t.expectString("a=43\n", out.items);
+		try t.expectSuffix(out.items, "a=43\n");
 	}
 }
 
@@ -621,7 +649,7 @@ test "kv: int" {
 
 		kv.int("over", n);
 		try kv.logTo(out.writer());
-		try t.expectString(try std.fmt.bufPrint(&buf, "over={d}\n", .{n}), out.items);
+		try t.expectSuffix(out.items, try std.fmt.bufPrint(&buf, "over={d}\n", .{n}));
 	}
 }
 
@@ -639,7 +667,7 @@ test "kv: int special values" {
 		defer pool.release(kv);
 		kv.int("n", 123456789123456798123456789123456789123456798123456789);
 		try kv.logTo(out.writer());
-		try t.expectString("n=123456789123456798123456789123456789123456798123456789\n", out.items);
+		try t.expectSuffix(out.items, "n=123456789123456798123456789123456789123456798123456789\n");
 	}
 
 	{
@@ -649,7 +677,7 @@ test "kv: int special values" {
 		defer pool.release(kv);
 		kv.int("n", -123456789123456798123456789123456789123456798123456789);
 		try kv.logTo(out.writer());
-		try t.expectString("n=-123456789123456798123456789123456789123456798123456789\n", out.items);
+		try t.expectSuffix(out.items, "n=-123456789123456798123456789123456789123456798123456789\n");
 	}
 
 	{
@@ -659,7 +687,7 @@ test "kv: int special values" {
 		defer pool.release(kv);
 		kv.int("n", @as(?u32, null));
 		try kv.logTo(out.writer());
-		try t.expectString("n=null\n", out.items);
+		try t.expectSuffix(out.items, "n=null\n");
 	}
 
 	{
@@ -669,7 +697,7 @@ test "kv: int special values" {
 		defer pool.release(kv);
 		kv.int("n", 0);
 		try kv.logTo(out.writer());
-		try t.expectString("n=0\n", out.items);
+		try t.expectSuffix(out.items, "n=0\n");
 	}
 
 	{
@@ -679,7 +707,7 @@ test "kv: int special values" {
 		defer pool.release(kv);
 		kv.int("n", @as(i64, 0));
 		try kv.logTo(out.writer());
-		try t.expectString("n=0\n", out.items);
+		try t.expectSuffix(out.items, "n=0\n");
 	}
 }
 
@@ -696,7 +724,7 @@ test "kv: int buffer full" {
 		kv.int("a", 33);
 		kv.int("areallyrealylongkey", 99);
 		try kv.logTo(out.writer());
-		try t.expectString("a=33\n", out.items);
+		try t.expectSuffix(out.items, "a=33\n");
 	}
 
 	{
@@ -706,7 +734,7 @@ test "kv: int buffer full" {
 		kv.int("a", 43);
 		kv.int("b", 9999);
 		try kv.logTo(out.writer());
-		try t.expectString("a=43\n", out.items);
+		try t.expectSuffix(out.items, "a=43\n");
 	}
 }
 
@@ -723,7 +751,7 @@ test "kv: bool null/true/false" {
 		defer pool.release(kv);
 		kv.boolean("tea", true);
 		try kv.logTo(out.writer());
-		try t.expectString("tea=Y\n", out.items);
+		try t.expectSuffix(out.items, "tea=Y\n");
 	}
 
 	{
@@ -732,7 +760,7 @@ test "kv: bool null/true/false" {
 		defer pool.release(kv);
 		kv.boolean("table", false);
 		try kv.logTo(out.writer());
-		try t.expectString("table=N\n", out.items);
+		try t.expectSuffix(out.items, "table=N\n");
 	}
 
 	{
@@ -742,7 +770,7 @@ test "kv: bool null/true/false" {
 		defer pool.release(kv);
 		kv.boolean("other", @as(?bool, null));
 		try kv.logTo(out.writer());
-		try t.expectString("other=null\n", out.items);
+		try t.expectSuffix(out.items, "other=null\n");
 	}
 }
 
@@ -759,7 +787,7 @@ test "kv: bool full" {
 		kv.int("a", 33);
 		kv.boolean("areallyrealylongkey", true);
 		try kv.logTo(out.writer());
-		try t.expectString("a=33\n", out.items);
+		try t.expectSuffix(out.items, "a=33\n");
 	}
 
 	{
@@ -769,7 +797,7 @@ test "kv: bool full" {
 		kv.int("a", 43);
 		kv.boolean("just", false);
 		try kv.logTo(out.writer());
-		try t.expectString("a=43\n", out.items);
+		try t.expectSuffix(out.items, "a=43\n");
 	}
 }
 
@@ -795,7 +823,7 @@ test "kv: float" {
 
 		kv.float("over", n);
 		try kv.logTo(out.writer());
-		try t.expectString(try std.fmt.bufPrint(&buf, "over={d}\n", .{n}), out.items);
+		try t.expectSuffix(out.items, try std.fmt.bufPrint(&buf, "over={d}\n", .{n}));
 	}
 }
 
@@ -814,7 +842,7 @@ test "kv: float special values" {
 		defer pool.release(kv);
 		kv.float("n", @as(?f32, null));
 		try kv.logTo(out.writer());
-		try t.expectString("n=null\n", out.items);
+		try t.expectSuffix(out.items, "n=null\n");
 	}
 
 	{
@@ -824,7 +852,7 @@ test "kv: float special values" {
 		defer pool.release(kv);
 		kv.float("n", 0);
 		try kv.logTo(out.writer());
-		try t.expectString("n=0\n", out.items);
+		try t.expectSuffix(out.items, "n=0\n");
 	}
 
 	{
@@ -834,7 +862,7 @@ test "kv: float special values" {
 		defer pool.release(kv);
 		kv.float("n", @as(f64, 0));
 		try kv.logTo(out.writer());
-		try t.expectString("n=0\n", out.items);
+		try t.expectSuffix(out.items, "n=0\n");
 	}
 }
 
@@ -851,7 +879,7 @@ test "kv: float buffer full" {
 		kv.float("a", 33.2);
 		kv.float("arealongk", 0.33);
 		try kv.logTo(out.writer());
-		try t.expectString("a=33.2\n", out.items);
+		try t.expectSuffix(out.items, "a=33.2\n");
 	}
 
 	{
@@ -861,7 +889,7 @@ test "kv: float buffer full" {
 		kv.float("a", 1);
 		kv.float("b", 9.424);
 		try kv.logTo(out.writer());
-		try t.expectString("a=1\n", out.items);
+		try t.expectSuffix(out.items, "a=1\n");
 	}
 }
 
@@ -880,6 +908,6 @@ test "kv: error" {
 
 		kv.err("err", error.FileNotFound);
 		try kv.logTo(out.writer());
-		try t.expectString("err=FileNotFound\n", out.items);
+		try t.expectSuffix(out.items, "err=FileNotFound\n");
 	}
 }

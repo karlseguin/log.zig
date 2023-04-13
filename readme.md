@@ -17,8 +17,10 @@ try logz.setup(allocator, .{
 });
 
 // other places in your code
-logz.info().string("path", req.url.path).int("ms", elapsed).log() catch {};
+logz.info().string("path", req.url.path).int("ms", elapsed).log();
 ```
+
+(You can use `std.meta.stringToEnum(logz.Level, config.log_level) orelse .Warn` to turn a string into an enum)
 
 Alternatively, 1 or more explicit pools can be created:
 
@@ -30,13 +32,13 @@ defer requestLogs.deinit();
 requestLogs.err().
     string("context", "divide").
     float("a", a).
-    float("b", b).log() catch {};
+    float("b", b).log();
 ```
 
 # Important Notes
 1. Attribute keys are never escaped. logz assumes that attribute keys can be written as is.
 2. Logz will silently truncate attributes if the log entry exceeds the configured `max_size`. This truncation only happens at the attribute level (not in the middle of a key or value), thus either the whole key=value is written or none of it is.
-3. If the pool is empty, logz will attempt to dynamically allocate a new logger. If this fails, a noop logger will be return (the same noop logger). The log entry is silently dropped. An error message **is** written using `std.log.err`.
+3. If the pool is empty, logz will attempt to dynamically allocate a new logger. If this fails, a noop logger will be return. The log entry is silently dropped. An error message **is** written using `std.log.err`.
 
 ## Pools and Loggers
 Pools are thread-safe.
@@ -79,19 +81,19 @@ Pools are configured with a minimum log level:
 When getting a logger for a value lower than the configured level, a noop logger is returned. This logger exposes the same API, but does nothing.
 
 ```zig
-var logs = try logz.Pool.init(allocator, .{.Level = .Error});
+var logs = try logz.Pool.init(allocator, .{.level = .Error});
 
 // this won't do anything
-logs.info().bool("noop", true).log() catch {};
+logs.info().bool("noop", true).log();
 ```
 
 The noop logger is meant to be relatively fast. But it doesn't eliminate any complicated values you might pass. Consider this example:
 
 ```zig
-var logs = try logz.Pool.init(allocator, .{.Level = .None});
+var logs = try logz.Pool.init(allocator, .{.level = .None});
 try logs.warn().
     string("expensive", expensiveCall()).
-    log() catch {};
+    log();
 ```
 
 Although the logger is disabled (the log level is `Fatal`), the `expensiveCall()` function is still called. In such cases, it's necessary to use the `pool.shouldLog` function:
@@ -100,7 +102,7 @@ Although the logger is disabled (the log level is `Fatal`), the `expensiveCall()
 if (pool.shouldLog(.Warn)) {
     try logs.warn().
         string("expensive", expensiveCall()).
-        log() catch {};
+        log();
 }
 ```
 
@@ -130,26 +132,9 @@ pub const Config = struct {
 ### Timestamp and Level
 When using the `debug`, `info`, `warn`, `err` or `fatal` functions, logs will always begin with `@ts=$MILLISECONDS_SINCE_JAN1_1970_UTC @l=$LEVEL`, such as: `@ts=1679473882025 @l=INFO`.
 
-The `pool.logger()` function returns a logger without this prefix and regardless of what the configured log level is.
-
-The `pool.logger()` can be used for creating a log with a deferred level using the `ts()` and `level(logz.Level)` functions to inject the `@ts=` and `@l=` attributes:
-
-```zig
-// A log message for running a migration, but we want the level to be dynamic
-var l = logz.logger().ts().string("ctx", "migration.start");
-defer l.log();
-
-doSomething() catch |err| {
-    l.level(logz.Error).err(err)
-    return err;
-}
-
-...
-l.level(logz.Info)
-```
 
 ### Logger Life cycle
-The logger is implicitly returned to the pool when `log`, `logTo` or `logCanFail` is called. In rare cases where `log`, `logTo` or `logCanFail` are not called, the logger must be explicitly released using its `release()` function:
+The logger is implicitly returned to the pool when `log`, `logTo` or `tryLog` is called. In rare cases where `log`, `logTo` or `tryLog` are not called, the logger must be explicitly released using its `release()` function:
 
 ```zig
 // This is a contrived example to show explicit release
@@ -163,24 +148,52 @@ Loggers are mutable. The method chaining (aka fluent interface) is purely cosmet
 
 ```zig
 // chaining
-info().int("over", 9000).log() catch {};
+info().int("over", 9000).log();
 
 // no chaining
 var l = info();
 _ = l.int("over", 9000);
-l.log() catch {};
+l.log();
 ```
+
+
+### tryLog
+The call to `log` can fail. On failure, a message is written using `std.log.err`. However, `log` returns `void` to improve the API's usability (it doesn't require callers to `try` or `catch`).
+
+`tryLog` can be used instead of `log`. This function returns a `!void` and will not write to `std.log.err` on failure.
 
 ## Advanced Usage
 
-### Auto (Try) To Log Failures
-Aside from the initial setup, the only functions of a logger's API that return an error are: `log` and `logTo`. In most cases, an error logging can probably be ignored. Thus, it would be normal to `catch {}`:
+### Pre-setup
+`setup(CONFIG)` can be called multiple times, but isn't thread safe. The idea is that, at the very start, `setup` can be called with a minimal config so that any startup errors can be logged. After startup, but before the full application begins, `setup` is called a 2nd time with the correct config. Something like:
 
 ```zig
-_ = l.info().int("port", 9000).log() catch {};
-```
+pub fn main() !void {
+    var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = general_purpose_allocator.allocator();
 
-As an alternative, `logCanFail` can be used. This function returns `void` and, on an error, will attempt to log a warning using `std.log.err`.
+    // minimal config so that we can use logz will setting things up
+    try logz.setup(.{
+        .pool_size = 2, 
+        .max_size = 4096, 
+        .level = .Warn
+    });
+
+    // can safely call logz functions, since we now have a mimimal setup
+    const config = loadConfig();
+    // more startup things here
+
+    // ok, now setup our full logger (which we couldn't do until we read 
+    // our config, which could have failed)
+
+    try logz.setup(.{
+        .pool_size = config.log.pool_size, 
+        .max_size = config.log.max_size,
+        .level = config.log.level
+    });
+    ...
+}
+```
 
 ### Prefixes
 A pool can be configured with a prefix by setting the `prefix` field of the configuration. When set, all log entries generated by loggers of this pool will contain the prefix. 
@@ -193,7 +206,38 @@ The prefix is written as-is, with no escape and no enforcement of being a key=va
 var p = try logz.Pool.init(allocator, .{.prefix = "keemun"});
 defer p.deinit();
 
-p.info().boolean("tea", true).log() catch {};
+p.info().boolean("tea", true).log();
 ```
 
 The above will generate a log line: `keemun @ts=TIMESTAMP @l=INFO tea=Y"`
+
+### Deferred Level
+The `logger()` function returns a logger with no level. This can be used to defer the level:
+
+```zig
+var logger = logz.logger().stringSafe("ctx", "db.setup").string("path", path);
+defer logger.log();
+
+const db = zqlite.open(path, true) catch |err| {
+    logger.err("err", err).level(logz.Fatal);
+}
+
+logger.level(logz.Info);
+return db;
+```
+
+`level(logz.Level)` isn't chainable (it doesn't return self). This is because `level` is expected to be used as above, where it is the last call in a chain and thus we want to avoid an unused returned value error.
+
+Previously, we saw how an internal "noop" logger is returned when the log level is less than the configured log level. With a log level of `Warn`, the following is largely 3 noop function calls:
+
+```zig
+log.info().string("path", path).log();
+```
+
+With deferred log levels, this isn't possible - the configured log level is only considered when `log` (or `tryLog`) is called. Again, given a log level of `Warn`, the following **will not** log anything, but the call to `string("path", path)` is not a "noop":
+
+```zig
+var l = log.logger().string("path", path);
+l.level(logz.Info);
+l.log(); 
+```

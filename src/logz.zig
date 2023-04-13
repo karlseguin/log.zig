@@ -6,10 +6,22 @@ pub const Config = @import("config.zig").Config;
 
 const Allocator = std.mem.Allocator;
 
+// We expect setup to possibly be called multiple times, but only initially.
+// Specifically, calling setup with a minimum & hard-coding config right on
+// startup, and then calling setup again after load config values. The caller
+// is responsible for making sure setup is called in a thread-safe way (ideally)
+// on startup, when there's only a single thread. The idea is to setup a basic
+// logger early, so that any startup errors can be logged, possibly before the
+// logger is "correctly" setup.
+var init = false;
 var global: Pool = undefined;
 
 pub fn setup(allocator: Allocator, config: Config) !void {
+	if (init) {
+		global.deinit();
+	}
 	global = try Pool.init(allocator, config);
+	init = true;
 }
 
 pub const Level = enum(u3) {
@@ -108,42 +120,28 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn ts(self: Self) Self {
+	pub fn level(self: Self, lvl: Level) void {
 		switch (self.inner) {
 			.noop => {},
-			inline else => |l| l.ts(),
+			inline else => |l| l.level(lvl),
 		}
-		return self;
 	}
 
-	pub fn level(self: Self, lvl: Level) Self {
-		if (lvl == .None) return self;
-
+	pub fn tryLog(self: Self) !void {
 		switch (self.inner) {
 			.noop => {},
 			.kv => |kv| {
-				if (!self.pool.shouldLog(lvl)) return noop();
-				kv.level(lvl);
-			}
-		}
-		return self;
-	}
-
-	pub fn log(self: Self) !void {
-		switch (self.inner) {
-			.noop => {},
-			.kv => |kv| {
-				try kv.log();
+				if (self.pool.shouldLog(kv.lvl)) try kv.tryLog();
 				self.pool.release(kv);
 			}
 		}
 	}
 
-	pub fn logCanFail(self: Self) void {
+	pub fn log(self: Self) void {
 		switch (self.inner) {
 			.noop => {},
 			.kv => |kv| {
-				kv.logCanFail();
+				if (self.pool.shouldLog(kv.lvl)) kv.log();
 				self.pool.release(kv);
 			}
 		}
@@ -153,7 +151,7 @@ pub const Logger = struct {
 		switch (self.inner) {
 			.noop => {},
 			.kv => |kv| {
-				try kv.logTo(out);
+				if (self.pool.shouldLog(kv.lvl)) try kv.logTo(out);
 				self.pool.release(kv);
 			}
 		}

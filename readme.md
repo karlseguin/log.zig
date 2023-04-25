@@ -241,3 +241,17 @@ var l = log.logger().string("path", path);
 l.level(logz.Info);
 l.log(); 
 ```
+
+The `log.loggerL(LEVEL)` function is a very minor variant which allows setting a default log level. Using it, the original deferred example can be rewritten:
+
+```zig
+var logger = logz.loggerL(logs.Info).stringSafe("ctx", "db.setup").string("path", path);
+defer logger.log();
+
+const db = zqlite.open(path, true) catch |err| {
+    logger.err("err", err).level(logz.Fatal);
+}
+
+// This line is removed
+// logger.level(logz.Info);
+return db;

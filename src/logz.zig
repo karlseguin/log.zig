@@ -204,6 +204,10 @@ pub fn logger() Logger {
 	return global.logger();
 }
 
+pub fn loggerL(lvl: Level) Logger {
+	return global.loggerL(lvl);
+}
+
 test {
 	std.testing.refAllDecls(@This());
 }

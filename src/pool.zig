@@ -119,6 +119,13 @@ pub const Pool = struct {
 		return logz.Logger{.pool = self, .inner = .{.kv = kv}};
 	}
 
+	pub fn loggerL(self: *Self, lvl: logz.Level) logz.Logger {
+		const kv = self.acquire() orelse return logz.noop();
+		var l = logz.Logger{.pool = self, .inner = .{.kv = kv}};
+		l.level(lvl);
+		return l;
+	}
+
 	pub fn shouldLog(self: *Self, level: logz.Level) bool {
 		return @enumToInt(level) >= self.level;
 	}
@@ -442,6 +449,32 @@ test "pool: logger" {
 		l.level(logz.Level.Info);
 		try l.logTo(out.writer());
 		try t.expectSuffix(out.items, "");
+	}
+}
+
+test "pool: loggerL" {
+	var min_config = Config{.pool_size = 1, .max_size = 100};
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	{
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		try p.loggerL(logz.Warn).string("hero", "teg").logTo(out.writer());
+
+		try t.expectSuffix(out.items, "@l=WARN hero=teg\n");
+	}
+
+	{
+		out.clearRetainingCapacity();
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		var logger = p.loggerL(logz.Warn).string("hero", "teg");
+		logger.level(logz.Error);
+		try logger.logTo(out.writer());
+		try t.expectSuffix(out.items, "@l=ERROR hero=teg\n");
 	}
 }
 

@@ -215,7 +215,9 @@ The above will generate a log line: `keemun @ts=TIMESTAMP @l=INFO tea=Y"`
 The `logger()` function returns a logger with no level. This can be used to defer the level:
 
 ```zig
-var logger = logz.logger().stringSafe("ctx", "db.setup").string("path", path);
+var logger = logz.logger().
+    stringSafe("ctx", "db.setup").
+    string("path", path);
 defer logger.log();
 
 const db = zqlite.open(path, true) catch |err| {
@@ -245,7 +247,9 @@ l.log();
 The `log.loggerL(LEVEL)` function is a very minor variant which allows setting a default log level. Using it, the original deferred example can be rewritten:
 
 ```zig
-var logger = logz.loggerL(logs.Info).stringSafe("ctx", "db.setup").string("path", path);
+var logger = logz.loggerL(logz.Info).
+    stringSafe("ctx", "db.setup").
+    string("path", path);
 defer logger.log();
 
 const db = zqlite.open(path, true) catch |err| {
@@ -255,3 +259,16 @@ const db = zqlite.open(path, true) catch |err| {
 // This line is removed
 // logger.level(logz.Info);
 return db;
+```
+
+`errdefer` can be used with deferred logging as a simple and generic way to log errors. The above can be re-written as:
+
+```zig
+var logger = logz.loggerL(logz.Info).
+    stringSafe("ctx", "db.setup").
+    string("path", path);
+defer logger.log();
+errdefer |err| logger.err("err", err).level(logz.Fatal);
+
+return zqlite.open(path, true);
+```

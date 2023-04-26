@@ -168,9 +168,7 @@ pub const Logger = struct {
 	}
 };
 
-pub fn noop() Logger {
-	return .{.pool = undefined, .inner = .{.noop = {}}};
-}
+pub const noop = Logger{.pool = undefined, .inner = .{.noop = {}}};
 
 pub fn level() Level {
 	return @intToEnum(Level, global.level);
@@ -211,3 +209,4 @@ pub fn loggerL(lvl: Level) Logger {
 test {
 	std.testing.refAllDecls(@This());
 }
+

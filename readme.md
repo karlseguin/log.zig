@@ -272,3 +272,20 @@ errdefer |err| logger.err("err", err).level(logz.Fatal);
 
 return zqlite.open(path, true);
 ```
+
+## Testing
+When testing, I recommend you do the following in your main test entry:
+
+```zig
+test {
+    // don't use testing.allocator for this, since it will leak, but it's meant to
+    // be a global anyways.
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    try logz.setup(gpa.allocator(), .{.pool_size = 2, .level = .None});
+
+    // rest of your setup, like:
+    std.testing.refAllDecls(@This());
+}
+```
+
+In particular, until [https://github.com/ziglang/zig/issues/15091](https://github.com/ziglang/zig/issues/15091) is fixed, the log level must be set to `.None`.

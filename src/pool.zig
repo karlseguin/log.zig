@@ -95,32 +95,32 @@ pub const Pool = struct {
 	}
 
 	pub fn debug(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Debug)) self.loggerWithLevel(.Debug) else logz.noop();
+		return if (self.shouldLog(.Debug)) self.loggerWithLevel(.Debug) else logz.noop;
 	}
 
 	pub fn info(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Info)) self.loggerWithLevel(.Info) else logz.noop();
+		return if (self.shouldLog(.Info)) self.loggerWithLevel(.Info) else logz.noop;
 	}
 
 	pub fn warn(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Warn)) self.loggerWithLevel(.Warn) else logz.noop();
+		return if (self.shouldLog(.Warn)) self.loggerWithLevel(.Warn) else logz.noop;
 	}
 
 	pub fn err(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Error)) self.loggerWithLevel(.Error) else logz.noop();
+		return if (self.shouldLog(.Error)) self.loggerWithLevel(.Error) else logz.noop;
 	}
 
 	pub fn fatal(self: *Self) logz.Logger {
-		return if (self.shouldLog(.Fatal)) self.loggerWithLevel(.Fatal) else logz.noop();
+		return if (self.shouldLog(.Fatal)) self.loggerWithLevel(.Fatal) else logz.noop;
 	}
 
 	pub fn logger(self: *Self) logz.Logger {
-		const kv = self.acquire() orelse return logz.noop();
+		const kv = self.acquire() orelse return logz.noop;
 		return logz.Logger{.pool = self, .inner = .{.kv = kv}};
 	}
 
 	pub fn loggerL(self: *Self, lvl: logz.Level) logz.Logger {
-		const kv = self.acquire() orelse return logz.noop();
+		const kv = self.acquire() orelse return logz.noop;
 		var l = logz.Logger{.pool = self, .inner = .{.kv = kv}};
 		l.level(lvl);
 		return l;
@@ -131,7 +131,7 @@ pub const Pool = struct {
 	}
 
 	fn loggerWithLevel(self: *Self, lvl: logz.Level) logz.Logger {
-		var kv = self.acquire() orelse return logz.noop();
+		var kv = self.acquire() orelse return logz.noop;
 		kv.level(lvl);
 		return logz.Logger{.pool = self, .inner = .{.kv = kv}};
 	}

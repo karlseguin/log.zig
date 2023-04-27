@@ -20,8 +20,6 @@ try logz.setup(allocator, .{
 logz.info().string("path", req.url.path).int("ms", elapsed).log();
 ```
 
-(You can use `std.meta.stringToEnum(logz.Level, config.log_level) orelse .Warn` to turn a string into an enum)
-
 Alternatively, 1 or more explicit pools can be created:
 
 ```zig
@@ -51,6 +49,7 @@ The following functions returns a logger:
 * `pool.err()`
 * `pool.fatal()`
 * `pool.logger()`
+* * `pool.loggerL()`
 
 The returned logger is NOT thread safe. 
 
@@ -66,7 +65,7 @@ The logger can log:
 
 Binary values are url_base_64 encoded without padding.
 
-The logger also has a `stringSafe(key []const u8, value ?[]const u8)` and `stringSafeZ(key []const u8, value ?[*:0]const u8)`` which can be used when the caller is sure that `value` does not require escaping.
+The logger also has a `stringSafe(key []const u8, value ?[]const u8)` and `stringSafeZ(key []const u8, value ?[*:0]const u8)` which can be used when the caller is sure that `value` does not require escaping.
 
 ### Log Level
 Pools are configured with a minimum log level:
@@ -277,15 +276,19 @@ return zqlite.open(path, true);
 When testing, I recommend you do the following in your main test entry:
 
 ```zig
-test {
-    // don't use testing.allocator for this, since it will leak, but it's meant to
-    // be a global anyways.
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    try logz.setup(gpa.allocator(), .{.pool_size = 2, .level = .None});
+var leaking_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+const leaking_allocator = leaking_gpa.allocator();
 
-    // rest of your setup, like:
+test {
+    try logz.setup(leaking_allocator, .{.pool_size = 5, .level = .None});
+
+    // rest of your setup, such as::
     std.testing.refAllDecls(@This());
 }
 ```
 
-In particular, until [https://github.com/ziglang/zig/issues/15091](https://github.com/ziglang/zig/issues/15091) is fixed, the log level must be set to `.None`.
+First, you should not use `std.testing.allocator` since Zig offers no way to cleanup globals after tests are run. In the above, the `logz.Pool` *will* leak (but that should be ok in a test).
+
+Second, notice that we're using a global allocator. This is because the pool may need to dynamically allocate a logger, and thus the allocator must exist for the lifetime of the pool. Strictly speaking, this can be avoided if you know that the pool will never need to allocate a dynamic logger, so setting a sufficiently large `pool_size` would also work.
+
+Finally, you should set the log level to '.None' until the following Zig  issue is fixed [https://github.com/ziglang/zig/issues/15091](https://github.com/ziglang/zig/issues/15091).

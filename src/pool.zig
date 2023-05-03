@@ -78,6 +78,7 @@ pub const Pool = struct {
 	}
 
 	pub fn release(self: *Self, l: *Kv) void {
+		l.reset();
 		self.mutex.lock();
 
 		var loggers = self.loggers;
@@ -122,7 +123,7 @@ pub const Pool = struct {
 	pub fn loggerL(self: *Self, lvl: logz.Level) logz.Logger {
 		const kv = self.acquire() orelse return logz.noop;
 		var l = logz.Logger{.pool = self, .inner = .{.kv = kv}};
-		l.level(lvl);
+		_ = l.level(lvl);
 		return l;
 	}
 
@@ -252,23 +253,23 @@ test "pool: log to kv" {
 		defer p.deinit();
 
 		try p.debug().int("a", 1).logTo(out.writer());
-		try t.expectSuffix(out.items, " @l=DEBUG a=1\n");
+		try t.expectString("@ts=9999999999999 @l=DEBUG a=1\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.info().int("a", 2).logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=INFO a=2\n");
+		try t.expectString("@ts=9999999999999 @l=INFO a=2\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.warn().int("a", 333).logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=WARN a=333\n");
+		try t.expectString("@ts=9999999999999 @l=WARN a=333\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.err().int("a", 4444).logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=ERROR a=4444\n");
+		try t.expectString("@ts=9999999999999 @l=ERROR a=4444\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=FATAL aaa=zzzz\n");
+		try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
 	}
 
 	{
@@ -278,23 +279,23 @@ test "pool: log to kv" {
 
 		out.clearRetainingCapacity();
 		try p.debug().int("a", 1).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.info().int("a", 2).logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=INFO a=2\n");
+		try t.expectString("@ts=9999999999999 @l=INFO a=2\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.warn().int("a", 333).logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=WARN a=333\n");
+		try t.expectString("@ts=9999999999999 @l=WARN a=333\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.err().int("a", 4444).logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=ERROR a=4444\n");
+		try t.expectString("@ts=9999999999999 @l=ERROR a=4444\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=FATAL aaa=zzzz\n");
+		try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
 	}
 
 	{
@@ -304,23 +305,23 @@ test "pool: log to kv" {
 
 		out.clearRetainingCapacity();
 		try p.debug().int("a", 1).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.info().int("a", 2).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.warn().int("a", 333).logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=WARN a=333\n");
+		try t.expectString("@ts=9999999999999 @l=WARN a=333\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.err().int("a", 4444).logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=ERROR a=4444\n");
+		try t.expectString("@ts=9999999999999 @l=ERROR a=4444\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=FATAL aaa=zzzz\n");
+		try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
 	}
 
 	{
@@ -330,23 +331,23 @@ test "pool: log to kv" {
 
 		out.clearRetainingCapacity();
 		try p.debug().int("a", 1).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.info().int("a", 2).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.warn().int("a", 333).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.err().int("a", 4444).logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=ERROR a=4444\n");
+		try t.expectString("@ts=9999999999999 @l=ERROR a=4444\n", out.items);
 
 		out.clearRetainingCapacity();
 		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=FATAL aaa=zzzz\n");
+		try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
 	}
 
 	{
@@ -356,23 +357,23 @@ test "pool: log to kv" {
 
 		out.clearRetainingCapacity();
 		try p.debug().int("a", 1).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.info().int("a", 2).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.warn().int("a", 333).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.err().int("a", 4444).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=FATAL aaa=zzzz\n");
+		try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
 	}
 
 	{
@@ -382,23 +383,23 @@ test "pool: log to kv" {
 
 		out.clearRetainingCapacity();
 		try p.debug().int("a", 1).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.info().int("a", 2).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.warn().int("a", 333).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.err().int("a", 4444).logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 
 		out.clearRetainingCapacity();
 		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 	}
 }
 
@@ -412,7 +413,7 @@ test "pool: logger" {
 		defer p.deinit();
 
 		try p.logger().string("hero", "teg").logTo(out.writer());
-		try t.expectSuffix(out.items, "hero=teg\n");
+		try t.expectString("@ts=9999999999999 hero=teg\n", out.items);
 	}
 
 	{
@@ -422,7 +423,7 @@ test "pool: logger" {
 
 		var l = p.logger().string("hero", "teg");
 		try l.logTo(out.writer());
-		try t.expectSuffix(out.items, "hero=teg\n");
+		try t.expectString("@ts=9999999999999 hero=teg\n", out.items);
 	}
 
 	{
@@ -433,9 +434,9 @@ test "pool: logger" {
 		defer p.deinit();
 
 		var l = p.logger().string("hero", "teg");
-		l.level(logz.Level.Warn);
+		_ = l.level(logz.Level.Warn);
 		try l.logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=WARN hero=teg\n");
+		try t.expectString("@ts=9999999999999 @l=WARN hero=teg\n", out.items);
 	}
 
 	{
@@ -446,9 +447,9 @@ test "pool: logger" {
 		defer p.deinit();
 
 		var l = p.logger().string("hero", "teg");
-		l.level(logz.Level.Info);
+		l.level(logz.Level.Info).done();
 		try l.logTo(out.writer());
-		try t.expectSuffix(out.items, "");
+		try t.expectString("", out.items);
 	}
 }
 
@@ -463,7 +464,7 @@ test "pool: loggerL" {
 
 		try p.loggerL(logz.Warn).string("hero", "teg").logTo(out.writer());
 
-		try t.expectSuffix(out.items, "@l=WARN hero=teg\n");
+		try t.expectString("@ts=9999999999999 @l=WARN hero=teg\n", out.items);
 	}
 
 	{
@@ -472,9 +473,9 @@ test "pool: loggerL" {
 		defer p.deinit();
 
 		var logger = p.loggerL(logz.Warn).string("hero", "teg");
-		logger.level(logz.Error);
+		logger.level(.Error).done();
 		try logger.logTo(out.writer());
-		try t.expectSuffix(out.items, "@l=ERROR hero=teg\n");
+		try t.expectString("@ts=9999999999999 @l=ERROR hero=teg\n", out.items);
 	}
 }
 
@@ -491,27 +492,102 @@ test "pool: prefix" {
 	var l3 = p.info().int("id", 3);
 
 	try l1.logTo(out.writer());
-	try t.expectPrefix(out.items, "Keemun @ts=");
-	try t.expectSuffix(out.items, "@l=INFO id=1\n");
+	try t.expectString("Keemun @ts=9999999999999 @l=INFO id=1\n", out.items);
 
 	out.clearRetainingCapacity();
 	try l2.logTo(out.writer());
-	try t.expectPrefix(out.items, "Keemun @ts=");
-	try t.expectSuffix(out.items, "@l=INFO id=2\n");
+	try t.expectString("Keemun @ts=9999999999999 @l=INFO id=2\n", out.items);
 
 	out.clearRetainingCapacity();
 	try l3.logTo(out.writer());
-	try t.expectPrefix(out.items, "Keemun @ts=");
-	try t.expectSuffix(out.items, "@l=INFO id=3\n");
+	try t.expectString("Keemun @ts=9999999999999 @l=INFO id=3\n", out.items);
 
 	// and the prefix remains after being released and re-acquired
 	out.clearRetainingCapacity();
 	try p.info().int("id", 4).logTo(out.writer());
-	try t.expectPrefix(out.items, "Keemun @ts=");
-	try t.expectSuffix(out.items, "@l=INFO id=4\n");
+	try t.expectString("Keemun @ts=9999999999999 @l=INFO id=4\n", out.items);
 
 	out.clearRetainingCapacity();
 	try p.info().int("id", 5).logTo(out.writer());
-	try t.expectPrefix(out.items, "Keemun @ts=");
-	try t.expectSuffix(out.items, "@l=INFO id=5\n");
+	try t.expectString("Keemun @ts=9999999999999 @l=INFO id=5\n", out.items);
+}
+
+test "pool: multiuse" {
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	var p = try Pool.init(t.allocator, .{.pool_size = 2, .max_size = 100});
+	defer p.deinit();
+
+	{
+		// no extra data (why?)
+		var logger = p.loggerL(.Info).multiuse();
+		try logger.int("x", 4).logTo(out.writer());
+		try t.expectString("@ts=9999999999999 @l=INFO x=4\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+
+		out.clearRetainingCapacity();
+		_ = logger.int("x", 5);
+		logger.level(.Warn).done();
+		try logger.logTo(out.writer());
+		try t.expectString("@ts=9999999999999 @l=WARN x=5\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+		logger.release();
+	}
+
+	{
+		out.clearRetainingCapacity();
+		var logger = p.loggerL(.Info).stringSafe("rid", "req1").multiuse();
+		try logger.int("x", 4).logTo(out.writer());
+		try t.expectString("@ts=9999999999999 @l=INFO rid=req1 x=4\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+
+		out.clearRetainingCapacity();
+		_ = logger.int("x", 5);
+		logger.level(.Warn).done();
+		try logger.logTo(out.writer());
+		try t.expectString("@ts=9999999999999 @l=WARN rid=req1 x=5\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+		logger.release();
+	}
+}
+
+test "pool: multiuse with prefix" {
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	var p = try Pool.init(t.allocator, .{.pool_size = 2, .max_size = 100, .prefix = "silver=needle"});
+	defer p.deinit();
+
+	{
+		// no extra data (why?)
+		var logger = p.loggerL(.Info).multiuse();
+		try logger.int("x", 4).logTo(out.writer());
+		try t.expectString("silver=needle @ts=9999999999999 @l=INFO x=4\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+
+		out.clearRetainingCapacity();
+		_ = logger.int("x", 5);
+		_ = logger.level(.Warn);
+		try logger.logTo(out.writer());
+		try t.expectString("silver=needle @ts=9999999999999 @l=WARN x=5\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+		logger.release();
+	}
+
+	{
+		out.clearRetainingCapacity();
+		var logger = p.loggerL(.Info).stringSafe("rid", "req1").multiuse();
+		try logger.int("x", 4).logTo(out.writer());
+		try t.expectString("silver=needle @ts=9999999999999 @l=INFO rid=req1 x=4\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+
+		out.clearRetainingCapacity();
+		_ = logger.int("x", 5);
+		logger.level(.Warn).done();
+		try logger.logTo(out.writer());
+		try t.expectString("silver=needle @ts=9999999999999 @l=WARN rid=req1 x=5\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+		logger.release();
+	}
 }

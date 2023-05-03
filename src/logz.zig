@@ -48,6 +48,22 @@ pub const Logger = struct {
 
 	const Self = @This();
 
+	pub fn multiuse(self: Self) Self {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.multiuse(),
+		}
+		return self;
+	}
+
+	pub fn ctx(self: Self, value: []const u8) Self {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.ctx(value),
+		}
+		return self;
+	}
+
 	pub fn string(self: Self, key: []const u8, value: ?[]const u8) Self {
 		switch (self.inner) {
 			.noop => {},
@@ -112,27 +128,36 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn err(self: Self, key: []const u8, value: anyerror) Self {
+	pub fn errK(self: Self, key: []const u8, value: anyerror) Self {
 		switch (self.inner) {
 			.noop => {},
-			inline else => |l| l.err(key, value),
+			inline else => |l| l.errK(key, value),
 		}
 		return self;
 	}
 
-	pub fn level(self: Self, lvl: Level) void {
+	pub fn err(self: Self, value: anyerror) Self {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.err(value),
+		}
+		return self;
+	}
+
+	pub fn level(self: Self, lvl: Level) Self {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.level(lvl),
 		}
+		return self;
 	}
 
 	pub fn tryLog(self: Self) !void {
 		switch (self.inner) {
 			.noop => {},
 			.kv => |kv| {
+				defer self.maybeRelease(kv);
 				if (self.pool.shouldLog(kv.lvl)) try kv.tryLog();
-				self.pool.release(kv);
 			}
 		}
 	}
@@ -142,7 +167,7 @@ pub const Logger = struct {
 			.noop => {},
 			.kv => |kv| {
 				if (self.pool.shouldLog(kv.lvl)) kv.log();
-				self.pool.release(kv);
+				self.maybeRelease(kv);
 			}
 		}
 	}
@@ -151,8 +176,8 @@ pub const Logger = struct {
 		switch (self.inner) {
 			.noop => {},
 			.kv => |kv| {
+				defer self.maybeRelease(kv);
 				if (self.pool.shouldLog(kv.lvl)) try kv.logTo(out);
-				self.pool.release(kv);
 			}
 		}
 	}
@@ -161,9 +186,21 @@ pub const Logger = struct {
 		switch (self.inner) {
 			.noop => {},
 			.kv => |kv| {
-				kv.reset();
 				self.pool.release(kv);
 			},
+		}
+	}
+
+	// to break the chain
+	pub fn done(_: Self) void {
+		return;
+	}
+
+	fn maybeRelease(self: Self, kv: *Kv) void {
+		if (kv.multiuse_length == null) {
+			self.pool.release(kv);
+		} else {
+			kv.reuse();
 		}
 	}
 };

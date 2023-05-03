@@ -10,12 +10,15 @@ const File = std.fs.File;
 const Allocator = std.mem.Allocator;
 const b64 = std.base64.url_safe_no_pad.Encoder;
 
+const timestamp = if (t.is_test) t.timestamp else std.time.milliTimestamp;
+
 pub const Kv = struct {
 	buf: []u8,
 	pos: usize,
 	out: File,
 	lvl: logz.Level,
 	prefix_length: usize,
+	multiuse_length: ?usize,
 
 	const Self = @This();
 
@@ -37,6 +40,7 @@ pub const Kv = struct {
 		return .{
 			.buf = buf,
 			.lvl = .None,
+			.multiuse_length = null,
 			.prefix_length = prefix_length,
 			.pos = prefix_length,
 			.out = std.io.getStdOut(),
@@ -47,13 +51,30 @@ pub const Kv = struct {
 		allocator.free(self.buf);
 	}
 
+	pub fn multiuse(self: *Self) void {
+		self.multiuse_length = self.pos;
+	}
+
 	pub fn reset(self: *Self) void {
 		self.lvl = .None;
+		self.multiuse_length = null;
 		self.pos = self.prefix_length;
+	}
+
+	pub fn reuse(self: *Self) void {
+		self.lvl = .None;
+		self.pos = if (self.multiuse_length) |l| l else 0;
 	}
 
 	pub fn level(self: *Self, lvl: logz.Level) void {
 		self.lvl = lvl;
+	}
+
+	pub fn ctx(self: *Self, value: []const u8) void {
+			if (!self.writeKeyForValue("@ctx", value.len)) return;
+			var pos = self.pos;
+			mem.copy(u8, self.buf[pos..], value);
+			self.pos = pos + value.len;
 	}
 
 	pub fn string(self: *Self, key: []const u8, nvalue: ?[]const u8) void {
@@ -209,7 +230,22 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn err(self: *Self, key: []const u8, value: anyerror) void {
+	pub fn err(self: *Self, value: anyerror) void {
+		const T = @TypeOf(value);
+
+		switch (@typeInfo(T)) {
+			.Optional => {
+				if (value) |v| {
+					self.string("@err", @errorName(v));
+				} else {
+					self.writeNull("@err");
+				}
+			},
+			else => self.string("@err", @errorName(value)),
+		}
+	}
+
+	pub fn errK(self: *Self, key: []const u8, value: anyerror) void {
 		const T = @TypeOf(value);
 
 		switch (@typeInfo(T)) {
@@ -246,7 +282,7 @@ pub const Kv = struct {
 
 		var meta: [27]u8 = undefined;
 		mem.copy(u8, &meta, "@ts=");
-		_ = std.fmt.formatIntBuf(meta[4..], std.time.milliTimestamp(), 10, .lower, .{});
+		_ = std.fmt.formatIntBuf(meta[4..], timestamp(), 10, .lower, .{});
 
 		switch (self.lvl) {
 			.Debug => {
@@ -275,7 +311,6 @@ pub const Kv = struct {
 			},
 		}
 
-
 		if (pos != buf.len) {
 			buf[pos] = '\n';
 			try out.writeAll(buf[prefix_length..pos+1]);
@@ -283,7 +318,6 @@ pub const Kv = struct {
 			try out.writeAll(buf[prefix_length..pos]);
 			try out.writeAll("\n");
 		}
-		self.reset();
 	}
 
 	fn writeInt(self: *Self, key: []const u8, value: anytype) void {
@@ -906,8 +940,37 @@ test "kv: error" {
 		var kv = pool.acquire() orelse unreachable;
 		defer pool.release(kv);
 
-		kv.err("err", error.FileNotFound);
+		kv.errK("err", error.FileNotFound);
 		try kv.logTo(out.writer());
 		try t.expectSuffix(out.items, "err=FileNotFound\n");
+	}
+
+	{
+		out.clearRetainingCapacity();
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.err(error.FileNotFound);
+		try kv.logTo(out.writer());
+		try t.expectSuffix(out.items, "@err=FileNotFound\n");
+	}
+}
+
+test "kv: ctx" {
+	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
+	defer pool.deinit();
+
+	var out = std.ArrayList(u8).init(t.allocator);
+	try out.ensureTotalCapacity(100);
+	defer out.deinit();
+
+	{
+		// normal strings
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.ctx("test.kv.ctx");
+		try kv.logTo(out.writer());
+		try t.expectString(out.items, "@ts=9999999999999 @ctx=test.kv.ctx\n");
 	}
 }

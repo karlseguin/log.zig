@@ -14,3 +14,9 @@ pub fn getRandom() std.rand.DefaultPrng {
 	std.os.getrandom(std.mem.asBytes(&seed)) catch unreachable;
 	return std.rand.DefaultPrng.init(seed);
 }
+
+pub fn timestamp() i64 {
+	return 9999999999999;
+}
+
+pub const is_test = @import("builtin").is_test;

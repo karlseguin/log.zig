@@ -49,7 +49,7 @@ The following functions returns a logger:
 * `pool.err()`
 * `pool.fatal()`
 * `pool.logger()`
-* * `pool.loggerL()`
+* `pool.loggerL()`
 
 The returned logger is NOT thread safe. 
 
@@ -60,13 +60,13 @@ The logger can log:
 * `boolean(key: []const u8, value: ?boolean)`
 * `int(key: []const u8, value: ?any_int)`
 * `float(key: []const u8, value: ?any_float)`
-* `binary(key: []const u8, value: ?[]const u8)`
-* `err(key: []const u8, e: anyerror)`
-
-Binary values are url_base_64 encoded without padding.
-
-The logger also has a `stringSafe(key []const u8, value ?[]const u8)` and `stringSafeZ(key []const u8, value ?[*:0]const u8)` which can be used when the caller is sure that `value` does not require escaping.
-
+* `binary(key: []const u8, value: ?[]const u8)` - will be url_base_64 encoded
+* `err(e: anyerror)` - same as `errK("@err", e)`;
+* `errK(key: []const u8, e: anyerror)`
+* stringSafe(key: []const u8, value: ?[]const u8 - assumes value doesn't need to be encoded
+* stringSafeZ(key: []const u8, value: ?[*:0]const u8 - assumes value doesn't need to be encoded
+* ctx(value: []const u8) - same as `stringSafe("@ctx", value)`
+* 
 ### Log Level
 Pools are configured with a minimum log level:
 
@@ -131,7 +131,6 @@ pub const Config = struct {
 ### Timestamp and Level
 When using the `debug`, `info`, `warn`, `err` or `fatal` functions, logs will always begin with `@ts=$MILLISECONDS_SINCE_JAN1_1970_UTC @l=$LEVEL`, such as: `@ts=1679473882025 @l=INFO`.
 
-
 ### Logger Life cycle
 The logger is implicitly returned to the pool when `log`, `logTo` or `tryLog` is called. In rare cases where `log`, `logTo` or `tryLog` are not called, the logger must be explicitly released using its `release()` function:
 
@@ -154,7 +153,6 @@ var l = info();
 _ = l.int("over", 9000);
 l.log();
 ```
-
 
 ### tryLog
 The call to `log` can fail. On failure, a message is written using `std.log.err`. However, `log` returns `void` to improve the API's usability (it doesn't require callers to `try` or `catch`).
@@ -210,6 +208,20 @@ p.info().boolean("tea", true).log();
 
 The above will generate a log line: `keemun @ts=TIMESTAMP @l=INFO tea=Y"`
 
+### Multi-Use Logger
+Rather than having a logger automatically returned to the pool when `.log()` or `tryLog()` are called, it is possible to flag the logger for "multi-use". In such cases, the logger must be explicitly returned to the pool using `logger.release()`. This can be enabled by calling `multiuse` on the logger. Important, and the reason this feature exists, is logs by the same logger will share the same attributes up to the point where multiuse was called:
+
+```zig
+var logger = logz.logger().string("request_id", request_id).multiuse();
+defer logger.release(); // important
+
+logger.int("status", status_code).int("ms", elapsed_time).level(.Info).log()
+...
+logger.err("err", err).string("details", "write failed").level(.Error).log()
+```
+
+The above logs 2 distinct entries, both of which will contain the "request_id=XYZ" attribute. Do remember that while the logz.Pool is thread-safe, individual loggers are not. A multi-use logger should not be used across threads.
+
 ### Deferred Level
 The `logger()` function returns a logger with no level. This can be used to defer the level:
 
@@ -220,14 +232,12 @@ var logger = logz.logger().
 defer logger.log();
 
 const db = zqlite.open(path, true) catch |err| {
-    logger.err("err", err).level(logz.Fatal);
+    _ = logger.err("err", err).level(.Fatal);
 }
 
-logger.level(logz.Info);
+_ = logger.level(.Info);
 return db;
 ```
-
-`level(logz.Level)` isn't chainable (it doesn't return self). This is because `level` is expected to be used as above, where it is the last call in a chain and thus we want to avoid an unused returned value error.
 
 Previously, we saw how an internal "noop" logger is returned when the log level is less than the configured log level. With a log level of `Warn`, the following is largely 3 noop function calls:
 
@@ -239,35 +249,35 @@ With deferred log levels, this isn't possible - the configured log level is only
 
 ```zig
 var l = log.logger().string("path", path);
-l.level(logz.Info);
+_ = l.level(.Info);
 l.log(); 
 ```
 
 The `log.loggerL(LEVEL)` function is a very minor variant which allows setting a default log level. Using it, the original deferred example can be rewritten:
 
 ```zig
-var logger = logz.loggerL(logz.Info).
+var logger = logz.loggerL(.Info).
     stringSafe("ctx", "db.setup").
     string("path", path);
 defer logger.log();
 
 const db = zqlite.open(path, true) catch |err| {
-    logger.err("err", err).level(logz.Fatal);
+    _ = logger.err("err", err).level(.Fatal);
 }
 
 // This line is removed
-// logger.level(logz.Info);
+// logger.level(.Info);
 return db;
 ```
 
 `errdefer` can be used with deferred logging as a simple and generic way to log errors. The above can be re-written as:
 
 ```zig
-var logger = logz.loggerL(logz.Info).
+var logger = logz.loggerL(.Info).
     stringSafe("ctx", "db.setup").
     string("path", path);
 defer logger.log();
-errdefer |err| logger.err("err", err).level(logz.Fatal);
+errdefer |err| _ = logger.err("err", err).level(.Fatal);
 
 return zqlite.open(path, true);
 ```

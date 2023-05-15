@@ -66,7 +66,7 @@ The logger can log:
 * stringSafe(key: []const u8, value: ?[]const u8 - assumes value doesn't need to be encoded
 * stringSafeZ(key: []const u8, value: ?[*:0]const u8 - assumes value doesn't need to be encoded
 * ctx(value: []const u8) - same as `stringSafe("@ctx", value)`
-* 
+
 ### Log Level
 Pools are configured with a minimum log level:
 

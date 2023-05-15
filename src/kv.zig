@@ -71,10 +71,10 @@ pub const Kv = struct {
 	}
 
 	pub fn ctx(self: *Self, value: []const u8) void {
-			if (!self.writeKeyForValue("@ctx", value.len)) return;
-			var pos = self.pos;
-			mem.copy(u8, self.buf[pos..], value);
-			self.pos = pos + value.len;
+		if (!self.writeKeyForValue("@ctx", value.len)) return;
+		var pos = self.pos;
+		@memcpy(self.buf[pos..pos+value.len], value);
+		self.pos = pos + value.len;
 	}
 
 	pub fn string(self: *Self, key: []const u8, nvalue: ?[]const u8) void {
@@ -99,7 +99,7 @@ pub const Kv = struct {
 		}
 
 		if (!must_escape) {
-			mem.copy(u8, buf[pos..], value);
+			@memcpy(self.buf[pos..pos+value.len], value);
 			self.pos = pos + value.len;
 			return;
 		}
@@ -157,7 +157,7 @@ pub const Kv = struct {
 		if (value) |v| {
 			if (!self.writeKeyForValue(key, v.len)) return;
 			var pos = self.pos;
-			mem.copy(u8, self.buf[pos..], v);
+			@memcpy(self.buf[pos..pos+v.len], v);
 			self.pos = pos + v.len;
 		} else {
 			self.writeNull(key);
@@ -281,28 +281,28 @@ pub const Kv = struct {
 		}
 
 		var meta: [27]u8 = undefined;
-		mem.copy(u8, &meta, "@ts=");
+		@memcpy(meta[0..4], "@ts=");
 		_ = std.fmt.formatIntBuf(meta[4..], timestamp(), 10, .lower, .{});
 
 		switch (self.lvl) {
 			.Debug => {
-				mem.copy(u8, meta[17..], " @l=DEBUG ");
+				@memcpy(meta[17..], " @l=DEBUG ");
 				try out.writeAll(&meta);
 			},
 			.Info => {
-				mem.copy(u8, meta[17..], " @l=INFO ");
+				@memcpy(meta[17..26], " @l=INFO ");
 				try out.writeAll(meta[0..26]);
 			},
 			.Warn => {
-				mem.copy(u8, meta[17..], " @l=WARN ");
+				@memcpy(meta[17..26], " @l=WARN ");
 				try out.writeAll(meta[0..26]);
 			},
 			.Error => {
-				mem.copy(u8, meta[17..], " @l=ERROR ");
+				@memcpy(meta[17..], " @l=ERROR ");
 				try out.writeAll(&meta);
 			},
 			.Fatal => {
-				mem.copy(u8, meta[17..], " @l=FATAL ");
+				@memcpy(meta[17..], " @l=FATAL ");
 				try out.writeAll(&meta);
 			},
 			else => {
@@ -379,7 +379,7 @@ pub const Kv = struct {
 			pos += 1;
 		}
 
-		mem.copy(u8, buf[pos..], key);
+		@memcpy(buf[pos..pos+key.len], key);
 		pos += key.len;
 		buf[pos] = '=';
 		self.pos = pos + 1;
@@ -393,7 +393,7 @@ pub const Kv = struct {
 
 		if (!haveSpace(buf.len, pos, data.len)) return error.NoSpaceLeft;
 
-		mem.copy(u8, buf[pos..], data);
+		@memcpy(buf[pos..pos+data.len], data);
 		self.pos = pos + data.len;
 	}
 

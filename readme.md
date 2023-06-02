@@ -125,6 +125,9 @@ pub const Config = struct {
     // Data to prepend at the start of every logged message from this pool
     // See the Advanced Usage section
     prefix: ?[]const u8 = null,
+
+    // Where to write the output: can be either .stdout or .stderr
+    output: Output = .stdout,
 };
 ```
 

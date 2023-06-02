@@ -43,7 +43,10 @@ pub const Kv = struct {
 			.multiuse_length = null,
 			.prefix_length = prefix_length,
 			.pos = prefix_length,
-			.out = std.io.getStdOut(),
+			.out = switch (config.output) {
+				.stdout => std.io.getStdOut(),
+				.stderr => std.io.getStdErr(),
+			}
 		};
 	}
 

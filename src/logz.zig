@@ -31,13 +31,21 @@ pub const Level = enum(u3) {
 	Error,
 	Fatal,
 	None,
-};
 
-pub const Debug = Level.Debug;
-pub const Info = Level.Info;
-pub const Warn = Level.Warn;
-pub const Error = Level.Error;
-pub const Fatal = Level.Fatal;
+	pub fn parse(input: []const u8) ?Level {
+		if (input.len < 4 or input.len > 5) return null;
+		var buf: [5]u8 = undefined;
+
+		const lower = std.ascii.lowerString(&buf, input);
+		if (std.mem.eql(u8, lower, "debug")) return .Debug;
+		if (std.mem.eql(u8, lower, "info")) return .Info;
+		if (std.mem.eql(u8, lower, "warn")) return .Warn;
+		if (std.mem.eql(u8, lower, "error")) return .Error;
+		if (std.mem.eql(u8, lower, "fatal")) return .Fatal;
+		if (std.mem.eql(u8, lower, "none")) return .None;
+		return null;
+	}
+};
 
 pub const Logger = struct {
 	pool: *Pool,
@@ -243,7 +251,46 @@ pub fn loggerL(lvl: Level) Logger {
 	return global.loggerL(lvl);
 }
 
+const t = @import("t.zig");
 test {
 	std.testing.refAllDecls(@This());
 }
 
+test "level: parse" {
+	try t.expectEqual(@as(?Level, null), Level.parse("Nope"));
+	try t.expectEqual(@as(?Level, null), Level.parse(" info"));
+	try t.expectEqual(@as(?Level, null), Level.parse("info "));
+	try t.expectEqual(@as(?Level, null), Level.parse(""));
+	try t.expectEqual(@as(?Level, null), Level.parse(" "));
+	try t.expectEqual(@as(?Level, null), Level.parse("infoinfo"));
+
+	try t.expectEqual(Level.Debug, Level.parse("debug").?);
+	try t.expectEqual(Level.Debug, Level.parse("DEBUG").?);
+	try t.expectEqual(Level.Debug, Level.parse("Debug").?);
+	try t.expectEqual(Level.Debug, Level.parse("DeBuG").?);
+
+	try t.expectEqual(Level.Info, Level.parse("info").?);
+	try t.expectEqual(Level.Info, Level.parse("INFO").?);
+	try t.expectEqual(Level.Info, Level.parse("Info").?);
+	try t.expectEqual(Level.Info, Level.parse("InfO").?);
+
+	try t.expectEqual(Level.Warn, Level.parse("warn").?);
+	try t.expectEqual(Level.Warn, Level.parse("WARN").?);
+	try t.expectEqual(Level.Warn, Level.parse("Warn").?);
+	try t.expectEqual(Level.Warn, Level.parse("WArN").?);
+
+	try t.expectEqual(Level.Error, Level.parse("error").?);
+	try t.expectEqual(Level.Error, Level.parse("ERROR").?);
+	try t.expectEqual(Level.Error, Level.parse("Error").?);
+	try t.expectEqual(Level.Error, Level.parse("ErROr").?);
+
+	try t.expectEqual(Level.Fatal, Level.parse("fatal").?);
+	try t.expectEqual(Level.Fatal, Level.parse("FATAL").?);
+	try t.expectEqual(Level.Fatal, Level.parse("Fatal").?);
+	try t.expectEqual(Level.Fatal, Level.parse("faTAL").?);
+
+	try t.expectEqual(Level.None, Level.parse("none").?);
+	try t.expectEqual(Level.None, Level.parse("NONE").?);
+	try t.expectEqual(Level.None, Level.parse("None").?);
+	try t.expectEqual(Level.None, Level.parse("nONe").?);
+}

@@ -33,6 +33,8 @@ requestLogs.err().
     float("b", b).log();
 ```
 
+`logz.Level.parse([]const u8) ?Level` can be used to convert a string into a logz.Level.
+
 # Important Notes
 1. Attribute keys are never escaped. logz assumes that attribute keys can be written as is.
 2. Logz will silently truncate attributes if the log entry exceeds the configured `max_size`. This truncation only happens at the attribute level (not in the middle of a key or value), thus either the whole key=value is written or none of it is.

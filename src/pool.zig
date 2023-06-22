@@ -462,7 +462,7 @@ test "pool: loggerL" {
 		var p = try Pool.init(t.allocator, min_config);
 		defer p.deinit();
 
-		try p.loggerL(logz.Warn).string("hero", "teg").logTo(out.writer());
+		try p.loggerL(.Warn).string("hero", "teg").logTo(out.writer());
 
 		try t.expectString("@ts=9999999999999 @l=WARN hero=teg\n", out.items);
 	}
@@ -472,7 +472,7 @@ test "pool: loggerL" {
 		var p = try Pool.init(t.allocator, min_config);
 		defer p.deinit();
 
-		var logger = p.loggerL(logz.Warn).string("hero", "teg");
+		var logger = p.loggerL(.Warn).string("hero", "teg");
 		logger.level(.Error).done();
 		try logger.logTo(out.writer());
 		try t.expectString("@ts=9999999999999 @l=ERROR hero=teg\n", out.items);

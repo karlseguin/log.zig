@@ -34,7 +34,7 @@ pub const Pool = struct {
 			.loggers = loggers,
 			.available = size,
 			.allocator = allocator,
-			.level = @enumToInt(config.level),
+			.level = @intFromEnum(config.level),
 		};
 	}
 
@@ -128,7 +128,7 @@ pub const Pool = struct {
 	}
 
 	pub fn shouldLog(self: *Self, level: logz.Level) bool {
-		return @enumToInt(level) >= self.level;
+		return @intFromEnum(level) >= self.level;
 	}
 
 	fn loggerWithLevel(self: *Self, lvl: logz.Level) logz.Logger {

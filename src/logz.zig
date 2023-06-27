@@ -216,7 +216,7 @@ pub const Logger = struct {
 pub const noop = Logger{.pool = undefined, .inner = .{.noop = {}}};
 
 pub fn level() Level {
-	return @enumFromInt(Level, global.level);
+	return @enumFromInt(global.level);
 }
 
 pub fn shouldLog(l: Level) bool {

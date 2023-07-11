@@ -87,21 +87,23 @@ pub const Kv = struct {
 		}
 
 		const value = nvalue.?;
-		const originalPos = self.pos;
+		const original_pos = self.pos;
 		if (!self.writeKeyForValue(key, value.len)) return;
 
 		var pos = self.pos;
 		const buf = self.buf;
 
-		var must_escape = false;
-		for (value) |b| {
+		var needs_escape = false;
+		var escape_index: usize = 0;
+		for (value, 0..) |b, i| {
 			if (b == '=' or b == '"' or b == '\n' or b == ' ') {
-				must_escape = true;
+				needs_escape = true;
+				escape_index = i;
 				break;
 			}
 		}
 
-		if (!must_escape) {
+		if (!needs_escape) {
 			@memcpy(self.buf[pos..pos+value.len], value);
 			self.pos = pos + value.len;
 			return;
@@ -113,11 +115,16 @@ pub const Kv = struct {
 		buf[pos] = '"';
 		pos += 1;
 
-		for (value) |b| {
+		// we can directly copy up to the first escape sequence
+		const unescaped_end = pos + escape_index;
+		@memcpy(buf[pos..unescaped_end], value[0..escape_index]);
+		pos = unescaped_end;
+
+		for (value[escape_index..]) |b| {
 			switch (b) {
 				'\n' => {
 					if (spare == 0) {
-						self.pos = originalPos;
+						self.pos = original_pos;
 						return;
 					}
 					buf[pos] = '\\';
@@ -127,7 +134,7 @@ pub const Kv = struct {
 				},
 				'"' => {
 					if (spare == 0) {
-						self.pos = originalPos;
+						self.pos = original_pos;
 						return;
 					}
 					buf[pos] = '\\';

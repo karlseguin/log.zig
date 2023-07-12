@@ -116,6 +116,7 @@ pub const Pool = struct {
 	}
 
 	pub fn logger(self: *Self) logz.Logger {
+		if (self.level == @intFromEnum(logz.Level.None)) return logz.noop;
 		const kv = self.acquire() orelse return logz.noop;
 		return logz.Logger{.pool = self, .inner = .{.kv = kv}};
 	}

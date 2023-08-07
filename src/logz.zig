@@ -24,6 +24,13 @@ pub fn setup(allocator: Allocator, config: Config) !void {
 	init = true;
 }
 
+pub fn deinit() void {
+	if (init) {
+		global.deinit();
+		init = false;
+	}
+}
+
 pub const Level = enum(u3) {
 	Debug,
 	Info,

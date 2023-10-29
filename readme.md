@@ -57,6 +57,7 @@ The returned logger is NOT thread safe.
 
 ### Attributes
 The logger can log:
+* `fmt(key: []const u8, comptime format: []const u8, values: anytype)`
 * `string(key: []const u8, value: ?[]const u8)`
 * `stringZ(key: []const u8, value: ?[*:0]const u8)`
 * `boolean(key: []const u8, value: ?boolean)`

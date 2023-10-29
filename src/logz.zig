@@ -79,6 +79,14 @@ pub const Logger = struct {
 		return self;
 	}
 
+	pub fn fmt(self: Self, key: []const u8, comptime format: []const u8, values: anytype) Self {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.fmt(key, format, values),
+		}
+		return self;
+	}
+
 	pub fn string(self: Self, key: []const u8, value: ?[]const u8) Self {
 		switch (self.inner) {
 			.noop => {},

@@ -20,8 +20,6 @@ pub const Kv = struct {
 	prefix_length: usize,
 	multiuse_length: ?usize,
 
-	const Self = @This();
-
 	pub fn init(allocator: Allocator, config: Config) !Kv {
 		const buf = try allocator.alloc(u8, config.max_size);
 
@@ -50,48 +48,49 @@ pub const Kv = struct {
 		};
 	}
 
-	pub fn deinit(self: *Self, allocator: Allocator) void {
+	pub fn deinit(self: *Kv, allocator: Allocator) void {
 		allocator.free(self.buf);
 	}
 
-	pub fn multiuse(self: *Self) void {
+	pub fn multiuse(self: *Kv) void {
 		self.multiuse_length = self.pos;
 	}
 
-	pub fn reset(self: *Self) void {
+	pub fn reset(self: *Kv) void {
 		self.lvl = .None;
 		self.multiuse_length = null;
 		self.pos = self.prefix_length;
 	}
 
-	pub fn reuse(self: *Self) void {
+	pub fn reuse(self: *Kv) void {
 		self.lvl = .None;
 		self.pos = if (self.multiuse_length) |l| l else 0;
 	}
 
-	pub fn level(self: *Self, lvl: logz.Level) void {
+	pub fn level(self: *Kv, lvl: logz.Level) void {
 		self.lvl = lvl;
 	}
 
-	pub fn ctx(self: *Self, value: []const u8) void {
+	pub fn ctx(self: *Kv, value: []const u8) void {
 		if (!self.writeKeyForValue("@ctx", value.len)) return;
 		var pos = self.pos;
 		@memcpy(self.buf[pos..pos+value.len], value);
 		self.pos = pos + value.len;
 	}
 
-	pub fn string(self: *Self, key: []const u8, nvalue: ?[]const u8) void {
+	pub fn string(self: *Kv, key: []const u8, nvalue: ?[]const u8) void {
 		if (nvalue == null) {
 			self.writeNull(key);
 			return;
 		}
 
 		const value = nvalue.?;
-		const original_pos = self.pos;
 		if (!self.writeKeyForValue(key, value.len)) return;
 
 		var pos = self.pos;
+
 		const buf = self.buf;
+		const original_pos = self.pos;
 
 		var needs_escape = false;
 		var escape_index: usize = 0;
@@ -109,9 +108,6 @@ pub const Kv = struct {
 			return;
 		}
 
-		// At a minimum, we'll need 2 quotes to wrap the value
-		var spare = buf.len - pos - value.len - 2;
-
 		buf[pos] = '"';
 		pos += 1;
 
@@ -119,42 +115,43 @@ pub const Kv = struct {
 		const unescaped_end = pos + escape_index;
 		@memcpy(buf[pos..unescaped_end], value[0..escape_index]);
 		pos = unescaped_end;
+		self.pos = pos;
 
-		for (value[escape_index..]) |b| {
-			switch (b) {
-				'\n' => {
-					if (spare == 0) {
-						self.pos = original_pos;
-						return;
-					}
-					buf[pos] = '\\';
-					buf[pos+1] = 'n';
-					pos += 2;
-					spare -= 1;
-				},
-				'"' => {
-					if (spare == 0) {
-						self.pos = original_pos;
-						return;
-					}
-					buf[pos] = '\\';
-					buf[pos+1] = '"';
-					pos += 2;
-					spare -= 1;
-				},
-				else => {
-					buf[pos] = b;
-					pos += 1;
-				}
-			}
-		}
-		// this has to be safe, because we already reserved the spare space for this
-		// when we defined spare
+		self.writeEscapeValue(value[escape_index..]) catch {
+			self.pos = original_pos;
+		};
+
+		// this has to be safe, because writeEscapeValue always saves 1 space at the end
+		pos = self.pos;
 		buf[pos] = '"';
 		self.pos = pos + 1;
 	}
 
-	pub fn stringZ(self: *Self, key: []const u8, nvalue: ?[*:0]const u8) void {
+	pub fn fmt(self: *Kv, key: []const u8, comptime format: []const u8, values: anytype) void {
+		// if our write fails, we'll revert back to the initial position
+		const initial_pos = self.pos;
+		// we don't know the length of the final value, but it'll always be
+		// escaped, so we know we need at least 2 extra bytes for the opening and
+		// closing quotes
+		if (!self.writeKeyForValue(key, 2)) return;
+
+		const buf = self.buf;
+		var pos = self.pos;
+		buf[pos] = '"';
+		self.pos = pos + 1;
+
+		std.fmt.format(FmtWriter{.kv = self}, format, values) catch {
+			self.pos = initial_pos;
+			return;
+		};
+
+		// this has to be safe, because writeEscapeValue always saves 1 space at the end
+		pos = self.pos;
+		buf[pos] = '"';
+		self.pos = pos + 1;
+	}
+
+	pub fn stringZ(self: *Kv, key: []const u8, nvalue: ?[*:0]const u8) void {
 		if (nvalue == null) {
 			self.writeNull(key);
 			return;
@@ -163,7 +160,7 @@ pub const Kv = struct {
 	}
 
 	// cases where the caller is sure value does not need to be encoded
-	pub fn stringSafe(self: *Self, key: []const u8, value: ?[]const u8) void {
+	pub fn stringSafe(self: *Kv, key: []const u8, value: ?[]const u8) void {
 		if (value) |v| {
 			if (!self.writeKeyForValue(key, v.len)) return;
 			var pos = self.pos;
@@ -175,7 +172,7 @@ pub const Kv = struct {
 	}
 
 	// cases where the caller is sure value does not need to be encoded
-	pub fn stringSafeZ(self: *Self, key: []const u8, value: ?[*:0]const u8) void {
+	pub fn stringSafeZ(self: *Kv, key: []const u8, value: ?[*:0]const u8) void {
 		if (value) |v| {
 			self.stringSafe(key, std.mem.span(v));
 		} else {
@@ -183,7 +180,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn int(self: *Self, key: []const u8, value: anytype) void {
+	pub fn int(self: *Kv, key: []const u8, value: anytype) void {
 		const T = @TypeOf(value);
 
 		switch (@typeInfo(T)) {
@@ -198,7 +195,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn float(self: *Self, key: []const u8, value: anytype) void {
+	pub fn float(self: *Kv, key: []const u8, value: anytype) void {
 		const T = @TypeOf(value);
 		switch (@typeInfo(T)) {
 			.Optional => {
@@ -212,7 +209,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn boolean(self: *Self, key: []const u8, value: anytype) void {
+	pub fn boolean(self: *Kv, key: []const u8, value: anytype) void {
 		const T = @TypeOf(value);
 		switch (@typeInfo(T)) {
 			.Optional => {
@@ -226,7 +223,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn binary(self: *Self, key: []const u8, value: ?[]const u8) void {
+	pub fn binary(self: *Kv, key: []const u8, value: ?[]const u8) void {
 		if (value) |v| {
 			const enc_len = b64.calcSize(v.len);
 			if (!self.writeKeyForValue(key, enc_len)) return;
@@ -240,7 +237,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn err(self: *Self, value: anyerror) void {
+	pub fn err(self: *Kv, value: anyerror) void {
 		const T = @TypeOf(value);
 
 		switch (@typeInfo(T)) {
@@ -255,7 +252,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn errK(self: *Self, key: []const u8, value: anyerror) void {
+	pub fn errK(self: *Kv, key: []const u8, value: anyerror) void {
 		const T = @TypeOf(value);
 
 		switch (@typeInfo(T)) {
@@ -270,18 +267,18 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn tryLog(self: *Self) !void {
+	pub fn tryLog(self: *Kv) !void {
 		try self.logTo(self.out);
 	}
 
-	pub fn log(self: *Self) void {
+	pub fn log(self: *Kv) void {
 		self.logTo(self.out) catch |e| {
 			const msg = "logz: Failed to write log. Log will be dropped. Error was: {}";
 			std.log.err(msg, .{e});
 		};
 	}
 
-	pub fn logTo(self: *Self, out: anytype) !void {
+	pub fn logTo(self: *Kv, out: anytype) !void {
 		const pos = self.pos;
 		const buf = self.buf;
 		const prefix_length = self.prefix_length;
@@ -330,7 +327,7 @@ pub const Kv = struct {
 		}
 	}
 
-	fn writeInt(self: *Self, key: []const u8, value: anytype) void {
+	fn writeInt(self: *Kv, key: []const u8, value: anytype) void {
 		const rollback_position = self.pos;
 		if (!self.writeKeyForValue(key, 0)) return;
 
@@ -339,7 +336,7 @@ pub const Kv = struct {
 		};
 	}
 
-	fn writeFloat(self: *Self, key: []const u8, value: anytype) void {
+	fn writeFloat(self: *Kv, key: []const u8, value: anytype) void {
 		const rollback_position = self.pos;
 		if (!self.writeKeyForValue(key, 0)) return;
 
@@ -348,7 +345,7 @@ pub const Kv = struct {
 		};
 	}
 
-	fn writeBool(self: *Self, key: []const u8, value: anytype) void {
+	fn writeBool(self: *Kv, key: []const u8, value: anytype) void {
 		if (!self.writeKeyForValue(key, 1)) return;
 
 		// writeKeyForValue made sure we have 1 free space
@@ -361,7 +358,7 @@ pub const Kv = struct {
 		self.pos = pos + 1;
 	}
 
-	fn writeNull(self: *Self, key: []const u8) void {
+	fn writeNull(self: *Kv, key: []const u8) void {
 		if (!self.writeKeyForValue(key, 4)) return;
 
 		// writeKeyForValue made sure we have 4 free spaces
@@ -374,7 +371,7 @@ pub const Kv = struct {
 		self.pos = pos + 4;
 	}
 
-	fn writeKeyForValue(self: *Self, key: []const u8, value_len: usize) bool {
+	fn writeKeyForValue(self: *Kv, key: []const u8, value_len: usize) bool {
 		var pos = self.pos;
 		const buf = self.buf;
 
@@ -396,10 +393,9 @@ pub const Kv = struct {
 		return true;
 	}
 
-	// formatInt writer interface
-	pub fn writeAll(self: *Self, data: []const u8) !void {
+	pub fn writeAll(self: *Kv, data: []const u8) !void {
 		const pos = self.pos;
-		var buf = self.buf;
+		const buf = self.buf;
 
 		if (!haveSpace(buf.len, pos, data.len)) return error.NoSpaceLeft;
 
@@ -408,7 +404,7 @@ pub const Kv = struct {
 	}
 
 	// formatInt writer interface
-	pub fn writeByteNTimes(self: *Self, b: u8, n: usize) !void {
+	pub fn writeByteNTimes(self: *Kv, b: u8, n: usize) !void {
 		const pos = self.pos;
 		const buf = self.buf;
 		if (!haveSpace(buf.len, pos, n)) return error.NoSpaceLeft;
@@ -418,6 +414,61 @@ pub const Kv = struct {
 		}
 		self.pos = pos + n;
 	}
+
+	fn writeEscapeValue(self: *Kv, value: []const u8) !void {
+		const buf = self.buf;
+		var pos = self.pos;
+
+		// At a minimum, we'll need 1 quotes to end our value
+		const needed = value.len + 1;
+		const left = buf.len - pos;
+		if (needed > left) {
+			return error.NoSpaceLeft;
+		}
+		var spare = left - needed;
+
+		for (value) |b| {
+			switch (b) {
+				'\n' => {
+					if (spare == 0) {
+						return error.NoSpaceLeft;
+					}
+					buf[pos] = '\\';
+					buf[pos+1] = 'n';
+					pos += 2;
+					spare -= 1;
+				},
+				'"' => {
+					if (spare == 0) {
+						return error.NoSpaceLeft;
+					}
+					buf[pos] = '\\';
+					buf[pos+1] = '"';
+					pos += 2;
+					spare -= 1;
+				},
+				else => {
+					buf[pos] = b;
+					pos += 1;
+				}
+			}
+		}
+		self.pos = pos;
+	}
+
+	pub const FmtWriter = struct{
+		kv: *Kv,
+
+		pub const Error = anyerror;
+
+		pub fn writeAll(self: FmtWriter, data: []const u8) !void {
+			return self.kv.writeEscapeValue(data);
+		}
+
+		pub fn writeByteNTimes(self: FmtWriter, b: u8, n: usize) !void {
+			return self.kv.writeByteNTimes(b, n);
+		}
+	};
 };
 
 fn haveSpace(len: usize, pos: usize, to_add: usize) bool {
@@ -469,6 +520,17 @@ test "kv: string" {
 		kv.string("key", "the val\"ue");
 		try kv.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=\"the val\\\"ue\"\n");
+	}
+
+	{
+		// string requiring encoding 2
+		out.clearRetainingCapacity();
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.string("key", "a = b");
+		try kv.logTo(out.writer());
+		try t.expectSuffix(out.items, "key=\"a = b\"\n");
 	}
 
 	{
@@ -982,5 +1044,80 @@ test "kv: ctx" {
 		kv.ctx("test.kv.ctx");
 		try kv.logTo(out.writer());
 		try t.expectString(out.items, "@ts=9999999999999 @ctx=test.kv.ctx\n");
+	}
+}
+
+test "kv: fmt" {
+	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
+	defer pool.deinit();
+
+	var out = std.ArrayList(u8).init(t.allocator);
+	try out.ensureTotalCapacity(100);
+	defer out.deinit();
+
+	{
+		// normal strings
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.fmt("key", "over:{d}", .{9000});
+		try kv.logTo(out.writer());
+		try t.expectSuffix(out.items, "key=\"over:9000\"\n");
+	}
+
+	{
+		// string requiring encoding
+		out.clearRetainingCapacity();
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.fmt("longerkey", "over={d} !!", .{9001});
+		try kv.logTo(out.writer());
+		try t.expectSuffix(out.items, "longerkey=\"over=9001 !!\"\n");
+	}
+}
+
+test "kv: fmt buffer full" {
+	var out = std.ArrayList(u8).init(t.allocator);
+	try out.ensureTotalCapacity(100);
+	defer out.deinit();
+
+	var kv = try Kv.init(t.allocator, .{.max_size = 20});
+	defer kv.deinit(t.allocator);
+
+	{
+		// key is too large
+		kv.string("a", "abc");
+		kv.fmt("areallyrealylongkey", "z={d}", .{1});
+		try kv.logTo(out.writer());
+		try t.expectSuffix(out.items, "a=abc\n");
+	}
+
+	{
+		// value is too large
+		kv.reset();
+		out.clearRetainingCapacity();
+		kv.string("aa", "z");
+		kv.fmt("cc", "poweris={d}", .{9000});
+		try kv.logTo(out.writer());
+		try t.expectSuffix(out.items, "aa=z\n");
+	}
+
+	{
+		// escpace JUST fits
+		kv.reset();
+		out.clearRetainingCapacity();
+		kv.fmt("a", "{s}\"{s}", .{"value 1",  "value 2"});
+		try kv.logTo(out.writer());
+		try t.expectSuffix(out.items, "a=\"value 1\\\"value 2\"\n");
+	}
+
+	{
+		// escpace overflow by 1
+		kv.reset();
+		out.clearRetainingCapacity();
+		kv.string("ab", "h\n it \"goes\"?");
+		try kv.logTo(out.writer());
+		try t.expectSuffix(out.items, "\n");
 	}
 }

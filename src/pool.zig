@@ -23,7 +23,7 @@ pub const Pool = struct {
 		const loggers = try allocator.alloc(*Kv, size);
 
 		for (0..size) |i| {
-			var kv = try allocator.create(Kv);
+			const kv = try allocator.create(Kv);
 			kv.* = try Kv.init(allocator, config);
 			loggers[i] = kv;
 		}
@@ -57,7 +57,7 @@ pub const Pool = struct {
 			self.mutex.unlock();
 			const allocator = self.allocator;
 
-			var kv = allocator.create(Kv) catch |e| {
+			const kv = allocator.create(Kv) catch |e| {
 				logDynamicAllocationFailure(e);
 				return null;
 			};
@@ -226,16 +226,16 @@ test "pool: acquire and release" {
 	var p = try Pool.init(t.allocator, min_config);
 	defer p.deinit();
 
-	var l1a = p.acquire() orelse unreachable;
-	var l2a = p.acquire() orelse unreachable;
-	var l3a = p.acquire() orelse unreachable; // this should be dynamically generated
+	const l1a = p.acquire() orelse unreachable;
+	const l2a = p.acquire() orelse unreachable;
+	const l3a = p.acquire() orelse unreachable; // this should be dynamically generated
 
 	try t.expectEqual(false, l1a == l2a);
 	try t.expectEqual(false, l2a == l3a);
 
 	p.release(l1a);
 
-	var l1b = p.acquire() orelse unreachable;
+	const l1b = p.acquire() orelse unreachable;
 	try t.expectEqual(true, l1a == l1b);
 
 	p.release(l3a);
@@ -455,7 +455,7 @@ test "pool: logger" {
 }
 
 test "pool: loggerL" {
-	var min_config = Config{.pool_size = 1, .max_size = 100};
+	const min_config = Config{.pool_size = 1, .max_size = 100};
 	var out = std.ArrayList(u8).init(t.allocator);
 	defer out.deinit();
 

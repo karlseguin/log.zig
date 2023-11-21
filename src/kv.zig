@@ -73,7 +73,7 @@ pub const Kv = struct {
 
 	pub fn ctx(self: *Kv, value: []const u8) void {
 		if (!self.writeKeyForValue("@ctx", value.len)) return;
-		var pos = self.pos;
+		const pos = self.pos;
 		@memcpy(self.buf[pos..pos+value.len], value);
 		self.pos = pos + value.len;
 	}
@@ -163,7 +163,7 @@ pub const Kv = struct {
 	pub fn stringSafe(self: *Kv, key: []const u8, value: ?[]const u8) void {
 		if (value) |v| {
 			if (!self.writeKeyForValue(key, v.len)) return;
-			var pos = self.pos;
+			const pos = self.pos;
 			@memcpy(self.buf[pos..pos+v.len], v);
 			self.pos = pos + v.len;
 		} else {

@@ -223,7 +223,7 @@ defer logger.release(); // important
 
 logger.int("status", status_code).int("ms", elapsed_time).level(.Info).log()
 ...
-logger.err("err", err).string("details", "write failed").level(.Error).log()
+logger.err(err).string("details", "write failed").level(.Error).log()
 ```
 
 The above logs 2 distinct entries, both of which will contain the "request_id=XYZ" attribute. Do remember that while the logz.Pool is thread-safe, individual loggers are not. A multi-use logger should not be used across threads.
@@ -238,7 +238,7 @@ var logger = logz.logger().
 defer logger.log();
 
 const db = zqlite.open(path, true) catch |err| {
-    _ = logger.err("err", err).level(.Fatal);
+    _ = logger.err(err).level(.Fatal);
 }
 
 _ = logger.level(.Info);
@@ -268,7 +268,7 @@ var logger = logz.loggerL(.Info).
 defer logger.log();
 
 const db = zqlite.open(path, true) catch |err| {
-    _ = logger.err("err", err).level(.Fatal);
+    _ = logger.err(err).level(.Fatal);
 }
 
 // This line is removed
@@ -283,7 +283,7 @@ var logger = logz.loggerL(.Info).
     stringSafe("ctx", "db.setup").
     string("path", path);
 defer logger.log();
-errdefer |err| _ = logger.err("err", err).level(.Fatal);
+errdefer |err| _ = logger.err(err).level(.Fatal);
 
 return zqlite.open(path, true);
 ```

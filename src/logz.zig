@@ -79,6 +79,14 @@ pub const Logger = struct {
 		return self;
 	}
 
+	pub fn src(self: Self, value: std.builtin.SourceLocation) Self {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.src(value),
+		}
+		return self;
+	}
+
 	pub fn fmt(self: Self, key: []const u8, comptime format: []const u8, values: anytype) Self {
 		switch (self.inner) {
 			.noop => {},

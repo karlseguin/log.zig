@@ -74,8 +74,15 @@ pub const Kv = struct {
 	pub fn ctx(self: *Kv, value: []const u8) void {
 		if (!self.writeKeyForValue("@ctx", value.len)) return;
 		const pos = self.pos;
-		@memcpy(self.buf[pos..pos+value.len], value);
-		self.pos = pos + value.len;
+		const end = pos+value.len;
+		@memcpy(self.buf[pos..end], value);
+		self.pos = end;
+	}
+
+	pub fn src(self: *Kv, value: std.builtin.SourceLocation) void {
+		self.string("@src.file", value.file);
+		self.string("@src.fn", value.fn_name);
+		self.int("@src.line", value.line);
 	}
 
 	pub fn string(self: *Kv, key: []const u8, nvalue: ?[]const u8) void {
@@ -103,8 +110,9 @@ pub const Kv = struct {
 		}
 
 		if (!needs_escape) {
-			@memcpy(self.buf[pos..pos+value.len], value);
-			self.pos = pos + value.len;
+			const end = pos+value.len;
+			@memcpy(self.buf[pos..end], value);
+			self.pos = end;
 			return;
 		}
 
@@ -164,8 +172,9 @@ pub const Kv = struct {
 		if (value) |v| {
 			if (!self.writeKeyForValue(key, v.len)) return;
 			const pos = self.pos;
-			@memcpy(self.buf[pos..pos+v.len], v);
-			self.pos = pos + v.len;
+			const end = pos+v.len;
+			@memcpy(self.buf[pos..end], v);
+			self.pos = end;
 		} else {
 			self.writeNull(key);
 		}
@@ -386,8 +395,9 @@ pub const Kv = struct {
 			pos += 1;
 		}
 
-		@memcpy(buf[pos..pos+key.len], key);
-		pos += key.len;
+		const end = pos+key.len;
+		@memcpy(buf[pos..end], key);
+		pos = end;
 		buf[pos] = '=';
 		self.pos = pos + 1;
 		return true;
@@ -1044,6 +1054,25 @@ test "kv: ctx" {
 		kv.ctx("test.kv.ctx");
 		try kv.logTo(out.writer());
 		try t.expectString(out.items, "@ts=9999999999999 @ctx=test.kv.ctx\n");
+	}
+}
+
+test "kv: src" {
+	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
+	defer pool.deinit();
+
+	var out = std.ArrayList(u8).init(t.allocator);
+	try out.ensureTotalCapacity(100);
+	defer out.deinit();
+
+	{
+		// normal strings
+		var kv = pool.acquire() orelse unreachable;
+		defer pool.release(kv);
+
+		kv.src(@src());
+		try kv.logTo(out.writer());
+		try t.expectString(out.items, "@ts=9999999999999 @src.file=src/kv.zig @src.fn=\"test.kv: src\" @src.line=1073\n");
 	}
 }
 

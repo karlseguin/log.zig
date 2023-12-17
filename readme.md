@@ -18,6 +18,9 @@ try logz.setup(allocator, .{
 
 // other places in your code
 logz.info().string("path", req.url.path).int("ms", elapsed).log();
+
+// The src(@src()) + err(err) combo is great for errors
+logz.err().src(@src()).err(err).log();
 ```
 
 Alternatively, 1 or more explicit pools can be created:
@@ -69,6 +72,7 @@ The logger can log:
 * stringSafe(key: []const u8, value: ?[]const u8 - assumes value doesn't need to be encoded
 * stringSafeZ(key: []const u8, value: ?[*:0]const u8 - assumes value doesn't need to be encoded
 * ctx(value: []const u8) - same as `stringSafe("@ctx", value)`
+* src(value: std.builtin.SourceLocation) - Logs an `std.builtin.SourceLocation`, the type of value you get from the `@src()` builtin.
 
 ### Log Level
 Pools are configured with a minimum log level:

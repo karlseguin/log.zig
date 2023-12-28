@@ -1,8 +1,9 @@
 const std = @import("std");
-const t = @import("t.zig");
 const logz = @import("logz.zig");
 
-const Kv = @import("kv.zig").Kv;
+const Logger = logz.Logger;
+const Json = @import("json.zig").Json;
+const LogFmt = @import("logfmt.zig").LogFmt;
 const Config = @import("config.zig").Config;
 
 const Mutex = std.Thread.Mutex;
@@ -12,42 +13,44 @@ pub const Pool = struct {
 	level: u3,
 	mutex: Mutex,
 	config: Config,
-	loggers: []*Kv,
 	available: usize,
+	loggers: []Logger,
 	allocator: Allocator,
 
-	const Self = @This();
-
-	pub fn init(allocator: Allocator, config: Config) !Self {
+	pub fn init(allocator: Allocator, config: Config) !*Pool {
 		const size = config.pool_size;
-		const loggers = try allocator.alloc(*Kv, size);
 
-		for (0..size) |i| {
-			const kv = try allocator.create(Kv);
-			kv.* = try Kv.init(allocator, config);
-			loggers[i] = kv;
-		}
+		const loggers = try allocator.alloc(Logger, size);
+		errdefer allocator.free(loggers);
 
-		return Self{
-			.mutex = Mutex{},
+		const pool = try allocator.create(Pool);
+		errdefer allocator.destroy(pool);
+		pool.* = .{
+			.mutex = .{},
 			.config = config,
 			.loggers = loggers,
 			.available = size,
 			.allocator = allocator,
 			.level = @intFromEnum(config.level),
 		};
+
+		for (0..size) |i| {
+			loggers[i] = try pool.createLogger();
+		}
+
+		return pool;
 	}
 
-	pub fn deinit(self: *Self) void {
+	pub fn deinit(self: *Pool) void {
 		const allocator = self.allocator;
 		for (self.loggers) |l| {
-			l.deinit(allocator);
-			allocator.destroy(l);
+			self.destroyLogger(l);
 		}
 		allocator.free(self.loggers);
+		allocator.destroy(self);
 	}
 
-	pub fn acquire(self: *Self) ?*Kv {
+	pub fn acquire(self: *Pool) Logger {
 		self.mutex.lock();
 
 		const loggers = self.loggers;
@@ -55,29 +58,21 @@ pub const Pool = struct {
 		if (available == 0) {
 			// dont hold the lock over factory
 			self.mutex.unlock();
-			const allocator = self.allocator;
 
-			const kv = allocator.create(Kv) catch |e| {
+			const l = self.createLogger() catch |e| {
 				logDynamicAllocationFailure(e);
-				return null;
+				return logz.noop;
 			};
-
-			kv.* = Kv.init(allocator, self.config) catch |e| {
-				allocator.destroy(kv);
-				logDynamicAllocationFailure(e);
-				return null;
-			};
-
-			return kv;
+			return l;
 		}
 		const index = available - 1;
-		const kv = loggers[index];
+		const l = loggers[index];
 		self.available = index;
 		self.mutex.unlock();
-		return kv;
+		return l;
 	}
 
-	pub fn release(self: *Self, l: *Kv) void {
+	pub fn release(self: *Pool, l: Logger) void {
 		l.reset();
 		self.mutex.lock();
 
@@ -85,9 +80,7 @@ pub const Pool = struct {
 		const available = self.available;
 		if (available == loggers.len) {
 			self.mutex.unlock();
-			const allocator = self.allocator;
-			l.deinit(allocator);
-			allocator.destroy(l);
+			self.destroyLogger(l);
 			return;
 		}
 		loggers[available] = l;
@@ -95,47 +88,79 @@ pub const Pool = struct {
 		self.mutex.unlock();
 	}
 
-	pub fn debug(self: *Self) logz.Logger {
+	pub fn debug(self: *Pool) Logger {
 		return if (self.shouldLog(.Debug)) self.loggerWithLevel(.Debug) else logz.noop;
 	}
 
-	pub fn info(self: *Self) logz.Logger {
+	pub fn info(self: *Pool) Logger {
 		return if (self.shouldLog(.Info)) self.loggerWithLevel(.Info) else logz.noop;
 	}
 
-	pub fn warn(self: *Self) logz.Logger {
+	pub fn warn(self: *Pool) Logger {
 		return if (self.shouldLog(.Warn)) self.loggerWithLevel(.Warn) else logz.noop;
 	}
 
-	pub fn err(self: *Self) logz.Logger {
+	pub fn err(self: *Pool) Logger {
 		return if (self.shouldLog(.Error)) self.loggerWithLevel(.Error) else logz.noop;
 	}
 
-	pub fn fatal(self: *Self) logz.Logger {
+	pub fn fatal(self: *Pool) Logger {
 		return if (self.shouldLog(.Fatal)) self.loggerWithLevel(.Fatal) else logz.noop;
 	}
 
-	pub fn logger(self: *Self) logz.Logger {
+	pub fn logger(self: *Pool) Logger {
 		if (self.level == @intFromEnum(logz.Level.None)) return logz.noop;
-		const kv = self.acquire() orelse return logz.noop;
-		return logz.Logger{.pool = self, .inner = .{.kv = kv}};
+		return self.acquire();
 	}
 
-	pub fn loggerL(self: *Self, lvl: logz.Level) logz.Logger {
-		const kv = self.acquire() orelse return logz.noop;
-		var l = logz.Logger{.pool = self, .inner = .{.kv = kv}};
+	pub fn loggerL(self: *Pool, lvl: logz.Level) Logger {
+		var l = self.acquire();
 		_ = l.level(lvl);
 		return l;
 	}
 
-	pub fn shouldLog(self: *Self, level: logz.Level) bool {
+	pub fn shouldLog(self: *Pool, level: logz.Level) bool {
 		return @intFromEnum(level) >= self.level;
 	}
 
-	fn loggerWithLevel(self: *Self, lvl: logz.Level) logz.Logger {
-		var kv = self.acquire() orelse return logz.noop;
-		kv.level(lvl);
-		return logz.Logger{.pool = self, .inner = .{.kv = kv}};
+	fn loggerWithLevel(self: *Pool, lvl: logz.Level) Logger {
+		var l = self.acquire();
+		_ = l.level(lvl);
+		return l;
+	}
+
+	fn createLogger(self: *Pool) !Logger {
+		const config = self.config;
+		const allocator = self.allocator;
+
+		switch (self.config.encoding) {
+			.logfmt => {
+				const logfmt = try allocator.create(LogFmt);
+				errdefer allocator.destroy(logfmt);
+				logfmt.* = try LogFmt.init(allocator, config);
+				return .{.pool = self, .inner = .{.logfmt = logfmt}};
+			},
+			.json => {
+				const json = try allocator.create(Json);
+				errdefer allocator.destroy(json);
+				json.* = try Json.init(allocator, config);
+				return .{.pool = self, .inner = .{.json = json}};
+			},
+		}
+	}
+
+	fn destroyLogger(self: *Pool, l: Logger) void {
+		switch (l.inner) {
+			.logfmt => |logfmt| {
+				logfmt.deinit(self.allocator);
+				self.allocator.destroy(logfmt);
+			},
+			.json => |json| {
+				json.deinit(self.allocator);
+				self.allocator.destroy(json);
+			},
+			else => unreachable,
+		}
 	}
 };
 
@@ -144,6 +169,7 @@ fn logDynamicAllocationFailure(err: anyerror) void {
 	std.log.err(msg, .{err});
 }
 
+const t = @import("t.zig");
 test "pool: shouldLog" {
 	var min_config = Config{.pool_size = 1, .max_size = 1};
 
@@ -226,17 +252,17 @@ test "pool: acquire and release" {
 	var p = try Pool.init(t.allocator, min_config);
 	defer p.deinit();
 
-	const l1a = p.acquire() orelse unreachable;
-	const l2a = p.acquire() orelse unreachable;
-	const l3a = p.acquire() orelse unreachable; // this should be dynamically generated
+	const l1a = p.acquire();
+	const l2a = p.acquire();
+	const l3a = p.acquire(); // this should be dynamically generated
 
-	try t.expectEqual(false, l1a == l2a);
-	try t.expectEqual(false, l2a == l3a);
+	try t.expectEqual(false, l1a.inner.logfmt == l2a.inner.logfmt);
+	try t.expectEqual(false, l2a.inner.logfmt == l3a.inner.logfmt);
 
 	p.release(l1a);
 
-	const l1b = p.acquire() orelse unreachable;
-	try t.expectEqual(true, l1a == l1b);
+	const l1b = p.acquire();
+	try t.expectEqual(true, l1a.inner.logfmt == l1b.inner.logfmt);
 
 	p.release(l3a);
 	p.release(l2a);
@@ -401,6 +427,37 @@ test "pool: log to kv" {
 		out.clearRetainingCapacity();
 		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
 		try t.expectString("", out.items);
+	}
+}
+
+test "pool: log to json" {
+	var min_config = Config{.pool_size = 1, .max_size = 100, .encoding = .json};
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	{
+		min_config.level = .Debug;
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		try p.debug().int("a", 1).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"DEBUG\", \"a\":1}\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.info().int("a", 2).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"INFO\", \"a\":2}\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.warn().int("a", 333).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"WARN\", \"a\":333}\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.err().int("a", 4444).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"ERROR\", \"a\":4444}\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"FATAL\", \"aaa\":\"zzzz\"}\n", out.items);
 	}
 }
 

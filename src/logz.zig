@@ -1,7 +1,8 @@
 const std = @import("std");
 
-pub const Kv = @import("kv.zig").Kv;
+pub const Json = @import("json.zig").Json;
 pub const Pool = @import("pool.zig").Pool;
+pub const LogFmt = @import("logfmt.zig").LogFmt;
 pub const Config = @import("config.zig").Config;
 
 const Allocator = std.mem.Allocator;
@@ -14,7 +15,7 @@ const Allocator = std.mem.Allocator;
 // logger early, so that any startup errors can be logged, possibly before the
 // logger is "correctly" setup.
 var init = false;
-var global: Pool = undefined;
+var global: *Pool = undefined;
 
 pub fn setup(allocator: Allocator, config: Config) !void {
 	if (init) {
@@ -57,13 +58,12 @@ pub const Level = enum(u3) {
 pub const Logger = struct {
 	pool: *Pool,
 	inner: union(enum) {
-		kv: *Kv,
 		noop: void,
+		json: *Json,
+		logfmt: *LogFmt,
 	},
 
-	const Self = @This();
-
-	pub fn multiuse(self: Self) Self {
+	pub fn multiuse(self: Logger) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.multiuse(),
@@ -71,7 +71,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn ctx(self: Self, value: []const u8) Self {
+	pub fn ctx(self: Logger, value: []const u8) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.ctx(value),
@@ -79,7 +79,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn src(self: Self, value: std.builtin.SourceLocation) Self {
+	pub fn src(self: Logger, value: std.builtin.SourceLocation) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.src(value),
@@ -87,7 +87,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn fmt(self: Self, key: []const u8, comptime format: []const u8, values: anytype) Self {
+	pub fn fmt(self: Logger, key: []const u8, comptime format: []const u8, values: anytype) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.fmt(key, format, values),
@@ -95,7 +95,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn string(self: Self, key: []const u8, value: ?[]const u8) Self {
+	pub fn string(self: Logger, key: []const u8, value: ?[]const u8) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.string(key, value),
@@ -103,7 +103,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn stringZ(self: Self, key: []const u8, value: ?[*:0]const u8) Self {
+	pub fn stringZ(self: Logger, key: []const u8, value: ?[*:0]const u8) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.stringZ(key, value),
@@ -111,7 +111,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn stringSafe(self: Self, key: []const u8, value: ?[]const u8) Self {
+	pub fn stringSafe(self: Logger, key: []const u8, value: ?[]const u8) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.stringSafe(key, value),
@@ -119,7 +119,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn stringSafeZ(self: Self, key: []const u8, value: ?[*:0]const u8) Self {
+	pub fn stringSafeZ(self: Logger, key: []const u8, value: ?[*:0]const u8) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.stringSafeZ(key, value),
@@ -127,7 +127,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn binary(self: Self, key: []const u8, value: ?[]const u8) Self {
+	pub fn binary(self: Logger, key: []const u8, value: ?[]const u8) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.binary(key, value),
@@ -135,7 +135,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn int(self: Self, key: []const u8, value: anytype) Self {
+	pub fn int(self: Logger, key: []const u8, value: anytype) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.int(key, value),
@@ -143,7 +143,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn float(self: Self, key: []const u8, value: anytype) Self {
+	pub fn float(self: Logger, key: []const u8, value: anytype) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.float(key, value),
@@ -151,7 +151,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn boolean(self: Self, key: []const u8, value: anytype) Self {
+	pub fn boolean(self: Logger, key: []const u8, value: anytype) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.boolean(key, value),
@@ -159,7 +159,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn errK(self: Self, key: []const u8, value: anyerror) Self {
+	pub fn errK(self: Logger, key: []const u8, value: anyerror) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.errK(key, value),
@@ -167,7 +167,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn err(self: Self, value: anyerror) Self {
+	pub fn err(self: Logger, value: anyerror) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.err(value),
@@ -175,7 +175,7 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn level(self: Self, lvl: Level) Self {
+	pub fn level(self: Logger, lvl: Level) Logger {
 		switch (self.inner) {
 			.noop => {},
 			inline else => |l| l.level(lvl),
@@ -183,55 +183,60 @@ pub const Logger = struct {
 		return self;
 	}
 
-	pub fn tryLog(self: Self) !void {
+	pub fn tryLog(self: Logger) !void {
 		switch (self.inner) {
 			.noop => {},
-			.kv => |kv| {
-				defer self.maybeRelease(kv);
-				if (self.pool.shouldLog(kv.lvl)) try kv.tryLog();
+			inline else => |l| {
+				defer self.maybeRelease(l);
+				if (self.pool.shouldLog(l.lvl)) try l.tryLog();
 			}
 		}
 	}
 
-	pub fn log(self: Self) void {
+	pub fn log(self: Logger) void {
 		switch (self.inner) {
 			.noop => {},
-			.kv => |kv| {
-				if (self.pool.shouldLog(kv.lvl)) kv.log();
-				self.maybeRelease(kv);
+			inline else => |l| {
+				if (self.pool.shouldLog(l.lvl)) l.log();
+				self.maybeRelease(l);
 			}
 		}
 	}
 
-	pub fn logTo(self: Self, out: anytype) !void {
+	pub fn logTo(self: Logger, out: anytype) !void {
 		switch (self.inner) {
 			.noop => {},
-			.kv => |kv| {
-				defer self.maybeRelease(kv);
-				if (self.pool.shouldLog(kv.lvl)) try kv.logTo(out);
+			inline else => |l| {
+				defer self.maybeRelease(l);
+				if (self.pool.shouldLog(l.lvl)) try l.logTo(out);
 			}
 		}
 	}
 
-	pub fn release(self: Self) void {
+	pub fn release(self: Logger) void {
 		switch (self.inner) {
 			.noop => {},
-			.kv => |kv| {
-				self.pool.release(kv);
-			},
+			else => self.pool.release(self),
 		}
 	}
 
 	// to break the chain
-	pub fn done(_: Self) void {
+	pub fn done(_: Logger) void {
 		return;
 	}
 
-	fn maybeRelease(self: Self, kv: *Kv) void {
-		if (kv.multiuse_length == null) {
-			self.pool.release(kv);
+	fn maybeRelease(self: Logger, l: anytype) void {
+		if (l.multiuse_length == null) {
+			self.pool.release(self);
 		} else {
-			kv.reuse();
+			l.reuse();
+		}
+	}
+
+	pub fn reset(self: Logger) void {
+		switch (self.inner) {
+			.noop => {},
+			inline else => |l| l.reset(),
 		}
 	}
 };

@@ -1,18 +1,16 @@
 const std = @import("std");
-
-const t = @import("t.zig");
 const logz = @import("logz.zig");
 const Pool = @import("pool.zig").Pool;
 const Config = @import("config.zig").Config;
 
-const mem = std.mem;
 const File = std.fs.File;
 const Allocator = std.mem.Allocator;
 const b64 = std.base64.url_safe_no_pad.Encoder;
 
+const t = @import("t.zig");
 const timestamp = if (t.is_test) t.timestamp else std.time.milliTimestamp;
 
-pub const Kv = struct {
+pub const LogFmt = struct {
 	buf: []u8,
 	pos: usize,
 	out: File,
@@ -20,7 +18,7 @@ pub const Kv = struct {
 	prefix_length: usize,
 	multiuse_length: ?usize,
 
-	pub fn init(allocator: Allocator, config: Config) !Kv {
+	pub fn init(allocator: Allocator, config: Config) !LogFmt {
 		const buf = try allocator.alloc(u8, config.max_size);
 
 		var prefix_length: usize = 0;
@@ -48,30 +46,30 @@ pub const Kv = struct {
 		};
 	}
 
-	pub fn deinit(self: *Kv, allocator: Allocator) void {
+	pub fn deinit(self: *LogFmt, allocator: Allocator) void {
 		allocator.free(self.buf);
 	}
 
-	pub fn multiuse(self: *Kv) void {
+	pub fn multiuse(self: *LogFmt) void {
 		self.multiuse_length = self.pos;
 	}
 
-	pub fn reset(self: *Kv) void {
+	pub fn reset(self: *LogFmt) void {
 		self.lvl = .None;
 		self.multiuse_length = null;
 		self.pos = self.prefix_length;
 	}
 
-	pub fn reuse(self: *Kv) void {
+	pub fn reuse(self: *LogFmt) void {
 		self.lvl = .None;
 		self.pos = if (self.multiuse_length) |l| l else 0;
 	}
 
-	pub fn level(self: *Kv, lvl: logz.Level) void {
+	pub fn level(self: *LogFmt, lvl: logz.Level) void {
 		self.lvl = lvl;
 	}
 
-	pub fn ctx(self: *Kv, value: []const u8) void {
+	pub fn ctx(self: *LogFmt, value: []const u8) void {
 		if (!self.writeKeyForValue("@ctx", value.len)) return;
 		const pos = self.pos;
 		const end = pos+value.len;
@@ -79,19 +77,17 @@ pub const Kv = struct {
 		self.pos = end;
 	}
 
-	pub fn src(self: *Kv, value: std.builtin.SourceLocation) void {
+	pub fn src(self: *LogFmt, value: std.builtin.SourceLocation) void {
 		self.string("@src.file", value.file);
 		self.string("@src.fn", value.fn_name);
 		self.int("@src.line", value.line);
 	}
 
-	pub fn string(self: *Kv, key: []const u8, nvalue: ?[]const u8) void {
-		if (nvalue == null) {
+	pub fn string(self: *LogFmt, key: []const u8, nvalue: ?[]const u8) void {
+		const value = nvalue orelse {
 			self.writeNull(key);
 			return;
-		}
-
-		const value = nvalue.?;
+		};
 		if (!self.writeKeyForValue(key, value.len)) return;
 
 		var pos = self.pos;
@@ -135,7 +131,7 @@ pub const Kv = struct {
 		self.pos = pos + 1;
 	}
 
-	pub fn fmt(self: *Kv, key: []const u8, comptime format: []const u8, values: anytype) void {
+	pub fn fmt(self: *LogFmt, key: []const u8, comptime format: []const u8, values: anytype) void {
 		// if our write fails, we'll revert back to the initial position
 		const initial_pos = self.pos;
 		// we don't know the length of the final value, but it'll always be
@@ -148,7 +144,7 @@ pub const Kv = struct {
 		buf[pos] = '"';
 		self.pos = pos + 1;
 
-		std.fmt.format(FmtWriter{.kv = self}, format, values) catch {
+		std.fmt.format(FmtWriter{.logfmt = self}, format, values) catch {
 			self.pos = initial_pos;
 			return;
 		};
@@ -159,7 +155,7 @@ pub const Kv = struct {
 		self.pos = pos + 1;
 	}
 
-	pub fn stringZ(self: *Kv, key: []const u8, nvalue: ?[*:0]const u8) void {
+	pub fn stringZ(self: *LogFmt, key: []const u8, nvalue: ?[*:0]const u8) void {
 		if (nvalue == null) {
 			self.writeNull(key);
 			return;
@@ -168,20 +164,21 @@ pub const Kv = struct {
 	}
 
 	// cases where the caller is sure value does not need to be encoded
-	pub fn stringSafe(self: *Kv, key: []const u8, value: ?[]const u8) void {
-		if (value) |v| {
-			if (!self.writeKeyForValue(key, v.len)) return;
-			const pos = self.pos;
-			const end = pos+v.len;
-			@memcpy(self.buf[pos..end], v);
-			self.pos = end;
-		} else {
+	pub fn stringSafe(self: *LogFmt, key: []const u8, nvalue: ?[]const u8) void {
+		const value = nvalue orelse {
 			self.writeNull(key);
-		}
+			return;
+		};
+
+		if (!self.writeKeyForValue(key, value.len)) return;
+		const pos = self.pos;
+		const end = pos + value.len;
+		@memcpy(self.buf[pos..end], value);
+		self.pos = end;
 	}
 
 	// cases where the caller is sure value does not need to be encoded
-	pub fn stringSafeZ(self: *Kv, key: []const u8, value: ?[*:0]const u8) void {
+	pub fn stringSafeZ(self: *LogFmt, key: []const u8, value: ?[*:0]const u8) void {
 		if (value) |v| {
 			self.stringSafe(key, std.mem.span(v));
 		} else {
@@ -189,7 +186,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn int(self: *Kv, key: []const u8, value: anytype) void {
+	pub fn int(self: *LogFmt, key: []const u8, value: anytype) void {
 		const T = @TypeOf(value);
 
 		switch (@typeInfo(T)) {
@@ -204,7 +201,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn float(self: *Kv, key: []const u8, value: anytype) void {
+	pub fn float(self: *LogFmt, key: []const u8, value: anytype) void {
 		const T = @TypeOf(value);
 		switch (@typeInfo(T)) {
 			.Optional => {
@@ -218,7 +215,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn boolean(self: *Kv, key: []const u8, value: anytype) void {
+	pub fn boolean(self: *LogFmt, key: []const u8, value: anytype) void {
 		const T = @TypeOf(value);
 		switch (@typeInfo(T)) {
 			.Optional => {
@@ -232,21 +229,22 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn binary(self: *Kv, key: []const u8, value: ?[]const u8) void {
-		if (value) |v| {
-			const enc_len = b64.calcSize(v.len);
-			if (!self.writeKeyForValue(key, enc_len)) return;
-
-			// base64 encoded value never requires escaping, yay.
-			const pos = self.pos;
-			_ = b64.encode(self.buf[pos..], v);
-			self.pos = pos + enc_len;
-		} else {
+	pub fn binary(self: *LogFmt, key: []const u8, nvalue: ?[]const u8) void {
+		const value = nvalue orelse {
 			self.writeNull(key);
-		}
+			return;
+		};
+
+		const enc_len = b64.calcSize(value.len);
+		if (!self.writeKeyForValue(key, enc_len)) return;
+
+		// base64 encoded value never requires escaping, yay.
+		const pos = self.pos;
+		_ = b64.encode(self.buf[pos..], value);
+		self.pos = pos + enc_len;
 	}
 
-	pub fn err(self: *Kv, value: anyerror) void {
+	pub fn err(self: *LogFmt, value: anyerror) void {
 		const T = @TypeOf(value);
 
 		switch (@typeInfo(T)) {
@@ -261,7 +259,7 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn errK(self: *Kv, key: []const u8, value: anyerror) void {
+	pub fn errK(self: *LogFmt, key: []const u8, value: anyerror) void {
 		const T = @TypeOf(value);
 
 		switch (@typeInfo(T)) {
@@ -276,18 +274,18 @@ pub const Kv = struct {
 		}
 	}
 
-	pub fn tryLog(self: *Kv) !void {
+	pub fn tryLog(self: *LogFmt) !void {
 		try self.logTo(self.out);
 	}
 
-	pub fn log(self: *Kv) void {
+	pub fn log(self: *LogFmt) void {
 		self.logTo(self.out) catch |e| {
 			const msg = "logz: Failed to write log. Log will be dropped. Error was: {}";
 			std.log.err(msg, .{e});
 		};
 	}
 
-	pub fn logTo(self: *Kv, out: anytype) !void {
+	pub fn logTo(self: *LogFmt, out: anytype) !void {
 		const pos = self.pos;
 		const buf = self.buf;
 		const prefix_length = self.prefix_length;
@@ -336,7 +334,7 @@ pub const Kv = struct {
 		}
 	}
 
-	fn writeInt(self: *Kv, key: []const u8, value: anytype) void {
+	fn writeInt(self: *LogFmt, key: []const u8, value: anytype) void {
 		const rollback_position = self.pos;
 		if (!self.writeKeyForValue(key, 0)) return;
 
@@ -345,7 +343,7 @@ pub const Kv = struct {
 		};
 	}
 
-	fn writeFloat(self: *Kv, key: []const u8, value: anytype) void {
+	fn writeFloat(self: *LogFmt, key: []const u8, value: anytype) void {
 		const rollback_position = self.pos;
 		if (!self.writeKeyForValue(key, 0)) return;
 
@@ -354,7 +352,7 @@ pub const Kv = struct {
 		};
 	}
 
-	fn writeBool(self: *Kv, key: []const u8, value: anytype) void {
+	fn writeBool(self: *LogFmt, key: []const u8, value: anytype) void {
 		if (!self.writeKeyForValue(key, 1)) return;
 
 		// writeKeyForValue made sure we have 1 free space
@@ -367,7 +365,7 @@ pub const Kv = struct {
 		self.pos = pos + 1;
 	}
 
-	fn writeNull(self: *Kv, key: []const u8) void {
+	fn writeNull(self: *LogFmt, key: []const u8) void {
 		if (!self.writeKeyForValue(key, 4)) return;
 
 		// writeKeyForValue made sure we have 4 free spaces
@@ -380,7 +378,7 @@ pub const Kv = struct {
 		self.pos = pos + 4;
 	}
 
-	fn writeKeyForValue(self: *Kv, key: []const u8, value_len: usize) bool {
+	fn writeKeyForValue(self: *LogFmt, key: []const u8, value_len: usize) bool {
 		var pos = self.pos;
 		const buf = self.buf;
 
@@ -403,7 +401,7 @@ pub const Kv = struct {
 		return true;
 	}
 
-	pub fn writeAll(self: *Kv, data: []const u8) !void {
+	pub fn writeAll(self: *LogFmt, data: []const u8) !void {
 		const pos = self.pos;
 		const buf = self.buf;
 
@@ -414,7 +412,7 @@ pub const Kv = struct {
 	}
 
 	// formatInt writer interface
-	pub fn writeByteNTimes(self: *Kv, b: u8, n: usize) !void {
+	pub fn writeByteNTimes(self: *LogFmt, b: u8, n: usize) !void {
 		const pos = self.pos;
 		const buf = self.buf;
 		if (!haveSpace(buf.len, pos, n)) return error.NoSpaceLeft;
@@ -425,7 +423,7 @@ pub const Kv = struct {
 		self.pos = pos + n;
 	}
 
-	fn writeEscapeValue(self: *Kv, value: []const u8) !void {
+	fn writeEscapeValue(self: *LogFmt, value: []const u8) !void {
 		const buf = self.buf;
 		var pos = self.pos;
 
@@ -467,16 +465,16 @@ pub const Kv = struct {
 	}
 
 	pub const FmtWriter = struct{
-		kv: *Kv,
+		logfmt: *LogFmt,
 
 		pub const Error = anyerror;
 
 		pub fn writeAll(self: FmtWriter, data: []const u8) !void {
-			return self.kv.writeEscapeValue(data);
+			return self.logfmt.writeEscapeValue(data);
 		}
 
 		pub fn writeByteNTimes(self: FmtWriter, b: u8, n: usize) !void {
-			return self.kv.writeByteNTimes(b, n);
+			return self.logfmt.writeByteNTimes(b, n);
 		}
 	};
 };
@@ -485,7 +483,7 @@ fn haveSpace(len: usize, pos: usize, to_add: usize) bool {
 	return len >= pos + to_add;
 }
 
-test "haveSpace" {
+test "logfmt: haveSpace" {
 	for (0..10) |i| {
 		try t.expectEqual(true, haveSpace(10, 0, i));
 	}
@@ -502,107 +500,100 @@ test "haveSpace" {
 	}
 }
 
-test "kv: string" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
-
+test "logfmt: string" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	{
-		// normal strings
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
-		kv.string("key", "value");
-		kv.string("other", "rehto");
-		try kv.logTo(out.writer());
+	{
+		logfmt.string("key", "value");
+		logfmt.string("other", "rehto");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=value other=rehto\n");
 	}
 
 	{
 		// string requiring encoding
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.string("key", "the val\"ue");
-		try kv.logTo(out.writer());
+		logfmt.string("key", "the val\"ue");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=\"the val\\\"ue\"\n");
 	}
 
 	{
 		// string requiring encoding 2
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.string("key", "a = b");
-		try kv.logTo(out.writer());
+		logfmt.string("key", "a = b");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=\"a = b\"\n");
 	}
 
 	{
 		// null string
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.string("key", @as(?[]const u8, null));
-		try kv.logTo(out.writer());
+		logfmt.string("key", @as(?[]const u8, null));
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=null\n");
 	}
 }
 
-test "kv: string buffer full" {
+test "logfmt: string buffer full" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv = try Kv.init(t.allocator, .{.max_size = 20});
-	defer kv.deinit(t.allocator);
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 20});
+	defer logfmt.deinit(t.allocator);
 
 	{
 		// key is too large
-		kv.string("a", "abc");
-		kv.string("areallyrealylongkey", "z");
-		try kv.logTo(out.writer());
+		logfmt.string("a", "abc");
+		logfmt.string("areallyrealylongkey", "z");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=abc\n");
 	}
 
 	{
 		// value is too large
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.string("aa", "z");
-		kv.string("cc", "areallylongva");
-		try kv.logTo(out.writer());
+		logfmt.string("aa", "z");
+		logfmt.string("cc", "areallylongva");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "aa=z\n");
 	}
 
 	{
 		// escpace JUST fits
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.string("a", "h\n it \"goes\"?");
-		try kv.logTo(out.writer());
+		logfmt.string("a", "h\n it \"goes\"?");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=\"h\\n it \\\"goes\\\"?\"\n");
 	}
 
 	{
 		// escpace overflow by 1
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.string("ab", "h\n it \"goes\"?");
-		try kv.logTo(out.writer());
+		logfmt.string("ab", "h\n it \"goes\"?");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "\n");
 	}
 }
 
-test "kv: stringZ" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: stringZ" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
@@ -610,142 +601,133 @@ test "kv: stringZ" {
 
 	{
 		// normal strings
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-
-		kv.stringZ("key", "value");
-		kv.stringZ("other", "rehto");
-		try kv.logTo(out.writer());
+		logfmt.stringZ("key", "value");
+		logfmt.stringZ("other", "rehto");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=value other=rehto\n");
 	}
 
 	{
 		// string requiring encoding
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.stringZ("key", "the val\"ue");
-		try kv.logTo(out.writer());
+		logfmt.stringZ("key", "the val\"ue");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=\"the val\\\"ue\"\n");
 	}
 
 	{
 		// null string
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.stringZ("key", @as(?[*:0]const u8, null));
-		try kv.logTo(out.writer());
+		logfmt.stringZ("key", @as(?[*:0]const u8, null));
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=null\n");
 	}
 }
 
-test "kv: stringZ buffer full" {
+test "logfmt: stringZ buffer full" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv = try Kv.init(t.allocator, .{.max_size = 20});
-	defer kv.deinit(t.allocator);
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 20});
+	defer logfmt.deinit(t.allocator);
 
 	{
 		// key is too large
-		kv.stringZ("a", "abc");
-		kv.stringZ("areallyrealylongkey", "z");
-		try kv.logTo(out.writer());
+		logfmt.stringZ("a", "abc");
+		logfmt.stringZ("areallyrealylongkey", "z");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=abc\n");
 	}
 
 	{
 		// value is too large
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.stringZ("aa", "z");
-		kv.stringZ("cc", "areallylongva");
-		try kv.logTo(out.writer());
+		logfmt.stringZ("aa", "z");
+		logfmt.stringZ("cc", "areallylongva");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "aa=z\n");
 	}
 
 	{
 		// escpace JUST fits
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.stringZ("a", "h\n it \"goes\"?");
-		try kv.logTo(out.writer());
+		logfmt.stringZ("a", "h\n it \"goes\"?");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=\"h\\n it \\\"goes\\\"?\"\n");
 	}
 
 	{
 		// escpace overflow by 1
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.stringZ("ab", "h\n it \"goes\"?");
-		try kv.logTo(out.writer());
+		logfmt.stringZ("ab", "h\n it \"goes\"?");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "\n");
 	}
 }
 
-test "kv: binary" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: binary" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
 	{
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-
-		kv.binary("key", &[_]u8{9, 200, 33, 0});
-		try kv.logTo(out.writer());
+		logfmt.binary("key", &[_]u8{9, 200, 33, 0});
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=CcghAA\n");
 	}
 
 	{
 		// null
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.binary("key", @as(?[]const u8, null));
-		try kv.logTo(out.writer());
+		logfmt.binary("key", @as(?[]const u8, null));
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=null\n");
 	}
 }
 
-test "kv: binary buffer full" {
+test "logfmt: binary buffer full" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 10});
+	defer logfmt.deinit(t.allocator);
+
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv = try Kv.init(t.allocator, .{.max_size = 10});
-	defer kv.deinit(t.allocator);
-
 	{
 		// key is too large
-		kv.int("a", 1);
-		kv.binary("toolong", &[_]u8{9, 200, 33, 0, 2});
-		try kv.logTo(out.writer());
+		logfmt.int("a", 1);
+		logfmt.binary("toolong", &[_]u8{9, 200, 33, 0, 2});
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=1\n");
 	}
 
 	{
 		// value is too large
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.int("a", 43);
-		kv.binary("b", &[_]u8{9, 200, 0});
-		try kv.logTo(out.writer());
+		logfmt.int("a", 43);
+		logfmt.binary("b", &[_]u8{9, 200, 0});
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=43\n");
 	}
 }
 
-test "kv: int" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: int" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var r = t.getRandom();
 	const random = r.random();
@@ -759,19 +741,18 @@ test "kv: int" {
 	for (0..2000) |_| {
 		const n = random.int(i64);
 
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.int("over", n);
-		try kv.logTo(out.writer());
+		logfmt.int("over", n);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, try std.fmt.bufPrint(&buf, "over={d}\n", .{n}));
 	}
 }
 
-test "kv: int special values" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: int special values" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
@@ -779,147 +760,137 @@ test "kv: int special values" {
 
 	{
 		// max-ish
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.int("n", 123456789123456798123456789123456789123456798123456789);
-		try kv.logTo(out.writer());
+		logfmt.int("n", 123456789123456798123456789123456789123456798123456789);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "n=123456789123456798123456789123456789123456798123456789\n");
 	}
 
 	{
 		// min-ish
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.int("n", -123456789123456798123456789123456789123456798123456789);
-		try kv.logTo(out.writer());
+		logfmt.int("n", -123456789123456798123456789123456789123456798123456789);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "n=-123456789123456798123456789123456789123456798123456789\n");
 	}
 
 	{
 		// null
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.int("n", @as(?u32, null));
-		try kv.logTo(out.writer());
+		logfmt.int("n", @as(?u32, null));
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "n=null\n");
 	}
 
 	{
 		// comptime 0
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.int("n", 0);
-		try kv.logTo(out.writer());
+		logfmt.int("n", 0);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "n=0\n");
 	}
 
 	{
 		 //0
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.int("n", @as(i64, 0));
-		try kv.logTo(out.writer());
+		logfmt.int("n", @as(i64, 0));
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "n=0\n");
 	}
 }
 
-test "kv: int buffer full" {
+test "logfmt: int buffer full" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv = try Kv.init(t.allocator, .{.max_size = 10});
-	defer kv.deinit(t.allocator);
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 10});
+	defer logfmt.deinit(t.allocator);
 
 	{
 		// key is too large
-		kv.int("a", 33);
-		kv.int("areallyrealylongkey", 99);
-		try kv.logTo(out.writer());
+		logfmt.int("a", 33);
+		logfmt.int("areallyrealylongkey", 99);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=33\n");
 	}
 
 	{
 		// value is too large
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.int("a", 43);
-		kv.int("b", 9999);
-		try kv.logTo(out.writer());
+		logfmt.int("a", 43);
+		logfmt.int("b", 9999);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=43\n");
 	}
 }
 
-test "kv: bool null/true/false" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: bool null/true/false" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
 	{
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.boolean("tea", true);
-		try kv.logTo(out.writer());
+		logfmt.boolean("tea", true);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "tea=Y\n");
 	}
 
 	{
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.boolean("table", false);
-		try kv.logTo(out.writer());
+		logfmt.boolean("table", false);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "table=N\n");
 	}
 
 	{
-		out.clearRetainingCapacity();
 		// min-ish
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.boolean("other", @as(?bool, null));
-		try kv.logTo(out.writer());
+		logfmt.reset();
+		out.clearRetainingCapacity();
+		logfmt.boolean("other", @as(?bool, null));
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "other=null\n");
 	}
 }
 
-test "kv: bool full" {
+test "logfmt: bool full" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv = try Kv.init(t.allocator, .{.max_size = 10});
-	defer kv.deinit(t.allocator);
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 10});
+	defer logfmt.deinit(t.allocator);
 
 	{
 		// key is too large
-		kv.int("a", 33);
-		kv.boolean("areallyrealylongkey", true);
-		try kv.logTo(out.writer());
+		logfmt.int("a", 33);
+		logfmt.boolean("areallyrealylongkey", true);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=33\n");
 	}
 
 	{
 		// the 'N' overflows
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.int("a", 43);
-		kv.boolean("just", false);
-		try kv.logTo(out.writer());
+		logfmt.int("a", 43);
+		logfmt.boolean("just", false);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=43\n");
 	}
 }
 
-test "kv: float" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: float" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var r = t.getRandom();
 	const random = r.random();
@@ -933,19 +904,18 @@ test "kv: float" {
 	for (0..2000) |_| {
 		const n = random.float(f64);
 
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.float("over", n);
-		try kv.logTo(out.writer());
+		logfmt.float("over", n);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, try std.fmt.bufPrint(&buf, "over={d}\n", .{n}));
 	}
 }
 
-test "kv: float special values" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: float special values" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
@@ -954,64 +924,60 @@ test "kv: float special values" {
 	{
 		// null
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.float("n", @as(?f32, null));
-		try kv.logTo(out.writer());
+		logfmt.float("n", @as(?f32, null));
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "n=null\n");
 	}
 
 	{
 		// comptime 0
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.float("n", 0);
-		try kv.logTo(out.writer());
+		logfmt.float("n", 0);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "n=0\n");
 	}
 
 	{
 		 //0
+		 logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-		kv.float("n", @as(f64, 0));
-		try kv.logTo(out.writer());
+		logfmt.float("n", @as(f64, 0));
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "n=0\n");
 	}
 }
 
-test "kv: float buffer full" {
+test "logfmt: float buffer full" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv = try Kv.init(t.allocator, .{.max_size = 10});
-	defer kv.deinit(t.allocator);
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 10});
+	defer logfmt.deinit(t.allocator);
 
 	{
 		// key is too large
-		kv.float("a", 33.2);
-		kv.float("arealongk", 0.33);
-		try kv.logTo(out.writer());
+		logfmt.float("a", 33.2);
+		logfmt.float("arealongk", 0.33);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=33.2\n");
 	}
 
 	{
 		// value is too large
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.float("a", 1);
-		kv.float("b", 9.424);
-		try kv.logTo(out.writer());
+		logfmt.float("a", 1);
+		logfmt.float("b", 9.424);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=1\n");
 	}
 }
 
-test "kv: error" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: error" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
@@ -1019,28 +985,24 @@ test "kv: error" {
 
 	{
 		// normal strings
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-
-		kv.errK("err", error.FileNotFound);
-		try kv.logTo(out.writer());
+		logfmt.errK("err", error.FileNotFound);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "err=FileNotFound\n");
 	}
 
 	{
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.err(error.FileNotFound);
-		try kv.logTo(out.writer());
+		logfmt.err(error.FileNotFound);
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "@err=FileNotFound\n");
 	}
 }
 
-test "kv: ctx" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: ctx" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
@@ -1048,18 +1010,16 @@ test "kv: ctx" {
 
 	{
 		// normal strings
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-
-		kv.ctx("test.kv.ctx");
-		try kv.logTo(out.writer());
-		try t.expectString(out.items, "@ts=9999999999999 @ctx=test.kv.ctx\n");
+		logfmt.reset();
+		logfmt.ctx("test.logfmt.ctx");
+		try logfmt.logTo(out.writer());
+		try t.expectString(out.items, "@ts=9999999999999 @ctx=test.logfmt.ctx\n");
 	}
 }
 
-test "kv: src" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: src" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
@@ -1067,18 +1027,16 @@ test "kv: src" {
 
 	{
 		// normal strings
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-
-		kv.src(@src());
-		try kv.logTo(out.writer());
-		try t.expectString(out.items, "@ts=9999999999999 @src.file=src/kv.zig @src.fn=\"test.kv: src\" @src.line=1073\n");
+		const src = @src();
+		logfmt.src(src);
+		try logfmt.logTo(out.writer());
+		try t.expectFmt(out.items, "@ts=9999999999999 @src.file=src/logfmt.zig @src.fn=\"test.logfmt: src\" @src.line={d}\n", .{src.line});
 	}
 }
 
-test "kv: fmt" {
-	var pool = try Pool.init(t.allocator, .{.pool_size = 1});
-	defer pool.deinit();
+test "logfmt: fmt" {
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 100});
+	defer logfmt.deinit(t.allocator);
 
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
@@ -1086,67 +1044,63 @@ test "kv: fmt" {
 
 	{
 		// normal strings
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
-
-		kv.fmt("key", "over:{d}", .{9000});
-		try kv.logTo(out.writer());
+		logfmt.fmt("key", "over:{d}", .{9000});
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "key=\"over:9000\"\n");
 	}
 
 	{
 		// string requiring encoding
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		var kv = pool.acquire() orelse unreachable;
-		defer pool.release(kv);
 
-		kv.fmt("longerkey", "over={d} !!", .{9001});
-		try kv.logTo(out.writer());
+		logfmt.fmt("longerkey", "over={d} !!", .{9001});
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "longerkey=\"over=9001 !!\"\n");
 	}
 }
 
-test "kv: fmt buffer full" {
+test "logfmt: fmt buffer full" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	try out.ensureTotalCapacity(100);
 	defer out.deinit();
 
-	var kv = try Kv.init(t.allocator, .{.max_size = 20});
-	defer kv.deinit(t.allocator);
+	var logfmt = try LogFmt.init(t.allocator, .{.max_size = 20});
+	defer logfmt.deinit(t.allocator);
 
 	{
 		// key is too large
-		kv.string("a", "abc");
-		kv.fmt("areallyrealylongkey", "z={d}", .{1});
-		try kv.logTo(out.writer());
+		logfmt.string("a", "abc");
+		logfmt.fmt("areallyrealylongkey", "z={d}", .{1});
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=abc\n");
 	}
 
 	{
 		// value is too large
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.string("aa", "z");
-		kv.fmt("cc", "poweris={d}", .{9000});
-		try kv.logTo(out.writer());
+		logfmt.string("aa", "z");
+		logfmt.fmt("cc", "poweris={d}", .{9000});
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "aa=z\n");
 	}
 
 	{
 		// escpace JUST fits
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.fmt("a", "{s}\"{s}", .{"value 1",  "value 2"});
-		try kv.logTo(out.writer());
+		logfmt.fmt("a", "{s}\"{s}", .{"value 1",  "value 2"});
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "a=\"value 1\\\"value 2\"\n");
 	}
 
 	{
 		// escpace overflow by 1
-		kv.reset();
+		logfmt.reset();
 		out.clearRetainingCapacity();
-		kv.string("ab", "h\n it \"goes\"?");
-		try kv.logTo(out.writer());
+		logfmt.string("ab", "h\n it \"goes\"?");
+		try logfmt.logTo(out.writer());
 		try t.expectSuffix(out.items, "\n");
 	}
 }

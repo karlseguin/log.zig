@@ -69,10 +69,10 @@ The logger can log:
 * `binary(key: []const u8, value: ?[]const u8)` - will be url_base_64 encoded
 * `err(e: anyerror)` - same as `errK("@err", e)`;
 * `errK(key: []const u8, e: anyerror)`
-* stringSafe(key: []const u8, value: ?[]const u8 - assumes value doesn't need to be encoded
-* stringSafeZ(key: []const u8, value: ?[*:0]const u8 - assumes value doesn't need to be encoded
-* ctx(value: []const u8) - same as `stringSafe("@ctx", value)`
-* src(value: std.builtin.SourceLocation) - Logs an `std.builtin.SourceLocation`, the type of value you get from the `@src()` builtin.
+* `stringSafe(key: []const u8, value: ?[]const u8)` - assumes value doesn't need to be encoded
+* `stringSafeZ(key: []const u8, value: ?[*:0]const u8)` - assumes value doesn't need to be encoded
+* `ctx(value: []const u8)` - same as `stringSafe("@ctx", value)`
+* `src(value: std.builtin.SourceLocation)` - Logs an `std.builtin.SourceLocation`, the type of value you get from the `@src()` builtin.
 
 ### Log Level
 Pools are configured with a minimum log level:

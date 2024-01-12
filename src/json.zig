@@ -21,6 +21,7 @@ pub const Json = struct {
 
 	pub fn init(allocator: Allocator, config: Config) !Json {
 		const buf = try allocator.alloc(u8, config.max_size);
+		errdefer allocator.free(buf);
 
 		var prefix_length: usize = 0;
 		if (config.prefix) |prefix| {

@@ -25,6 +25,7 @@ pub const Pool = struct {
 
 		const pool = try allocator.create(Pool);
 		errdefer allocator.destroy(pool);
+
 		pool.* = .{
 			.mutex = .{},
 			.config = config,
@@ -34,8 +35,16 @@ pub const Pool = struct {
 			.level = @intFromEnum(config.level),
 		};
 
+		var initialized: usize = 0;
+		errdefer {
+			for (0..initialized) |i| {
+				pool.destroyLogger(loggers[i]);
+			}
+		}
+
 		for (0..size) |i| {
 			loggers[i] = try pool.createLogger();
+			initialized += 1;
 		}
 
 		return pool;

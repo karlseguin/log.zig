@@ -20,6 +20,7 @@ pub const LogFmt = struct {
 
 	pub fn init(allocator: Allocator, config: Config) !LogFmt {
 		const buf = try allocator.alloc(u8, config.max_size);
+		errdefer allocator.free(buf);
 
 		var prefix_length: usize = 0;
 		if (config.prefix) |prefix| {

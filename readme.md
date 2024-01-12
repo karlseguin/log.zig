@@ -1,6 +1,6 @@
 Structured Logging for Zig
 
-logz is an opinionated structured logger that outputs to stdout using logfmt or JSON. It aims to minimize runtime memory allocation by using a pool of pre-allocated loggers. 
+logz is an opinionated structured logger that outputs to stdout or stderr using logfmt or JSON. It aims to minimize runtime memory allocation by using a pool of pre-allocated loggers. 
 
 # Installation
 This library supports native Zig module (introduced in 0.11). Add a "logz" dependency to your `build.zig.zon`.
@@ -41,7 +41,7 @@ requestLogs.err().
 # Important Notes
 1. Attribute keys are never escaped. logz assumes that attribute keys can be written as is.
 2. Logz will silently truncate attributes if the log entry exceeds the configured `max_size`. This truncation only happens at the attribute level (not in the middle of a key or value), thus either the whole key=value is written or none of it is.
-3. If the pool is empty, logz will attempt to dynamically allocate a new logger. If this fails, a noop logger will be return. The log entry is silently dropped. An error message **is** written using `std.log.err`.
+3. Depending on the `pool_empty` configuration, when empty the pool will either dynamically create a logger (`.pool_empty = .create`) or return a noop logger (`.pool_empty = .noop)`. If creation fails, a noop logger will be return and an error is written using `std.log.err`. When `.pool_empty = .noop`, then there will be no memory allocations made after `Pool.init` returns.
 
 ## Pools and Loggers
 Pools are thread-safe.
@@ -119,6 +119,10 @@ Pools use the following configuration. The default value for each setting is sho
 pub const Config = struct {
     // The number of loggers to pre-allocate. 
     pool_size: usize = 32,
+
+    // Controls what the pool does when empty. It can either dynamically create
+    // a new Logger, or return the Noop logger.
+    pool_empty: PoolEmpty = .create, 
 
     // The maximum size, in bytes, that each log entry can be.
     // Writing more data than max_size will truncate the log at a key=value 

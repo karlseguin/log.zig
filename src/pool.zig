@@ -16,6 +16,7 @@ pub const Pool = struct {
 	available: usize,
 	loggers: []Logger,
 	allocator: Allocator,
+	empty: Config.PoolEmpty,
 
 	pub fn init(allocator: Allocator, config: Config) !*Pool {
 		const size = config.pool_size;
@@ -32,6 +33,7 @@ pub const Pool = struct {
 			.loggers = loggers,
 			.available = size,
 			.allocator = allocator,
+			.empty = config.pool_empty,
 			.level = @intFromEnum(config.level),
 		};
 
@@ -67,6 +69,10 @@ pub const Pool = struct {
 		if (available == 0) {
 			// dont hold the lock over factory
 			self.mutex.unlock();
+
+			if (self.empty == .noop) {
+				return logz.noop;
+			}
 
 			const l = self.createLogger() catch |e| {
 				logDynamicAllocationFailure(e);
@@ -268,14 +274,37 @@ test "pool: acquire and release" {
 	try t.expectEqual(false, l1a.inner.logfmt == l2a.inner.logfmt);
 	try t.expectEqual(false, l2a.inner.logfmt == l3a.inner.logfmt);
 
-	p.release(l1a);
+	l1a.release();
 
 	const l1b = p.acquire();
 	try t.expectEqual(true, l1a.inner.logfmt == l1b.inner.logfmt);
 
-	p.release(l3a);
-	p.release(l2a);
-	p.release(l1b);
+	l3a.release();
+	l2a.release();
+	l1b.release();
+}
+
+test "pool: empty noop" {
+	// not 100% sure this is testing exactly what I want, but it's ....something ?
+	const min_config = Config{.pool_size = 2, .max_size = 1, .pool_empty = .noop};
+	var p = try Pool.init(t.allocator, min_config);
+	defer p.deinit();
+
+	const l1a = p.acquire();
+	const l2a = p.acquire();
+	const l3a = p.acquire(); // this should be noop
+
+	try t.expectEqual(false, l1a.inner.logfmt == l2a.inner.logfmt);
+	try t.expectEqual(.noop, std.meta.activeTag(l3a.inner));
+
+	l1a.release();
+
+	const l1b = p.acquire();
+	try t.expectEqual(true, l1a.inner.logfmt == l1b.inner.logfmt);
+
+	l3a.release();
+	l2a.release();
+	l1b.release();
 }
 
 test "pool: log to kv" {

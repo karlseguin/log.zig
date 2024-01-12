@@ -7,14 +7,20 @@ pub const Config = struct {
 	prefix: ?[]const u8 = null,
 	output: Output = .stdout,
 	encoding: Encoding = .logfmt,
+	pool_empty: PoolEmpty = .create,
 
-	const Output = enum {
+	pub const Output = enum {
 		stdout,
 		stderr,
 	};
 
-	const Encoding = enum {
+	pub const Encoding = enum {
 		json,
 		logfmt,
+	};
+
+	pub const PoolEmpty = enum {
+		create,
+		noop,
 	};
 };

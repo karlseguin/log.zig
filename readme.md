@@ -2,6 +2,9 @@ Structured Logging for Zig
 
 logz is an opinionated structured logger that outputs to stdout or stderr using logfmt or JSON. It aims to minimize runtime memory allocation by using a pool of pre-allocated loggers. 
 
+# Metrics
+If you're looking for metrics, check out my <a href="https://github.com/karlseguin/metrics.zig">prometheus library for Zig</a>.
+
 # Installation
 This library supports native Zig module (introduced in 0.11). Add a "logz" dependency to your `build.zig.zon`.
 

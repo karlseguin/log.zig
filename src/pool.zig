@@ -5,18 +5,26 @@ const Logger = logz.Logger;
 const Json = @import("json.zig").Json;
 const LogFmt = @import("logfmt.zig").LogFmt;
 const Config = @import("config.zig").Config;
+const BufferPool = @import("buffer.zig").Pool;
 
 const Mutex = std.Thread.Mutex;
 const Allocator = std.mem.Allocator;
 
 pub const Pool = struct {
 	level: u3,
-	mutex: Mutex,
 	config: Config,
+
+	// Passed to the loggers to coordinate writes to the output
+	log_mutex: Mutex,
+
+	// Used by the pool when acquiring/releasing a logger
+	pool_mutex: Mutex,
+
 	available: usize,
 	loggers: []Logger,
 	allocator: Allocator,
 	empty: Config.PoolEmpty,
+	buffer_pool: BufferPool,
 
 	pub fn init(allocator: Allocator, config: Config) !*Pool {
 		const size = config.pool_size;
@@ -24,15 +32,20 @@ pub const Pool = struct {
 		const loggers = try allocator.alloc(Logger, size);
 		errdefer allocator.free(loggers);
 
+		var buffer_pool = try BufferPool.init(allocator, &config);
+		errdefer buffer_pool.deinit();
+
 		const pool = try allocator.create(Pool);
 		errdefer allocator.destroy(pool);
 
 		pool.* = .{
-			.mutex = .{},
+			.log_mutex = .{},
+			.pool_mutex = .{},
 			.config = config,
 			.loggers = loggers,
 			.available = size,
 			.allocator = allocator,
+			.buffer_pool = buffer_pool,
 			.empty = config.pool_empty,
 			.level = @intFromEnum(config.level),
 		};
@@ -57,18 +70,19 @@ pub const Pool = struct {
 		for (self.loggers) |l| {
 			self.destroyLogger(l);
 		}
+		self.buffer_pool.deinit();
 		allocator.free(self.loggers);
 		allocator.destroy(self);
 	}
 
 	pub fn acquire(self: *Pool) Logger {
-		self.mutex.lock();
+		self.pool_mutex.lock();
 
 		const loggers = self.loggers;
 		const available = self.available;
 		if (available == 0) {
 			// dont hold the lock over factory
-			self.mutex.unlock();
+			self.pool_mutex.unlock();
 
 			if (self.empty == .noop) {
 				return logz.noop;
@@ -83,24 +97,24 @@ pub const Pool = struct {
 		const index = available - 1;
 		const l = loggers[index];
 		self.available = index;
-		self.mutex.unlock();
+		self.pool_mutex.unlock();
 		return l;
 	}
 
 	pub fn release(self: *Pool, l: Logger) void {
 		l.reset();
-		self.mutex.lock();
+		self.pool_mutex.lock();
 
 		var loggers = self.loggers;
 		const available = self.available;
 		if (available == loggers.len) {
-			self.mutex.unlock();
+			self.pool_mutex.unlock();
 			self.destroyLogger(l);
 			return;
 		}
 		loggers[available] = l;
 		self.available = available + 1;
-		self.mutex.unlock();
+		self.pool_mutex.unlock();
 	}
 
 	pub fn debug(self: *Pool) Logger {
@@ -145,20 +159,28 @@ pub const Pool = struct {
 	}
 
 	fn createLogger(self: *Pool) !Logger {
-		const config = self.config;
+		const config = &self.config;
 		const allocator = self.allocator;
 
 		switch (self.config.encoding) {
 			.logfmt => {
+				var buffer = try self.buffer_pool.create();
+				errdefer buffer.deinit();
+
 				const logfmt = try allocator.create(LogFmt);
 				errdefer allocator.destroy(logfmt);
-				logfmt.* = try LogFmt.init(allocator, config);
+
+				logfmt.* = try LogFmt.init(allocator, &self.log_mutex, buffer, config);
 				return .{.pool = self, .inner = .{.logfmt = logfmt}};
 			},
 			.json => {
+				var buffer = try self.buffer_pool.create();
+				errdefer buffer.deinit();
+
 				const json = try allocator.create(Json);
 				errdefer allocator.destroy(json);
-				json.* = try Json.init(allocator, config);
+
+				json.* = try Json.init(allocator, &self.log_mutex, buffer, config);
 				return .{.pool = self, .inner = .{.json = json}};
 			},
 		}
@@ -186,7 +208,7 @@ fn logDynamicAllocationFailure(err: anyerror) void {
 
 const t = @import("t.zig");
 test "pool: shouldLog" {
-	var min_config = Config{.pool_size = 1, .max_size = 1};
+	var min_config = Config{.pool_size = 1, .buffer_size = 1};
 
 	{
 		min_config.level = .Debug;
@@ -263,7 +285,7 @@ test "pool: shouldLog" {
 
 test "pool: acquire and release" {
 	// not 100% sure this is testing exactly what I want, but it's ....something ?
-	const min_config = Config{.pool_size = 2, .max_size = 1};
+	const min_config = Config{.pool_size = 2, .buffer_size = 1};
 	var p = try Pool.init(t.allocator, min_config);
 	defer p.deinit();
 
@@ -286,7 +308,7 @@ test "pool: acquire and release" {
 
 test "pool: empty noop" {
 	// not 100% sure this is testing exactly what I want, but it's ....something ?
-	const min_config = Config{.pool_size = 2, .max_size = 1, .pool_empty = .noop};
+	const min_config = Config{.pool_size = 2, .buffer_size = 1, .pool_empty = .noop};
 	var p = try Pool.init(t.allocator, min_config);
 	defer p.deinit();
 
@@ -307,8 +329,84 @@ test "pool: empty noop" {
 	l1b.release();
 }
 
-test "pool: log to kv" {
-	var min_config = Config{.pool_size = 1, .max_size = 100};
+test "pool: logger" {
+	var min_config = Config{.pool_size = 1, .buffer_size = 100};
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	{
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		try p.logger().string("hero", "teg").logTo(out.writer());
+		try t.expectString("@ts=9999999999999 hero=teg\n", out.items);
+	}
+
+	{
+		out.clearRetainingCapacity();
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		var l = p.logger().string("hero", "teg");
+		try l.logTo(out.writer());
+		try t.expectString("@ts=9999999999999 hero=teg\n", out.items);
+	}
+
+	{
+		// delayed level, above min
+		out.clearRetainingCapacity();
+		min_config.level = .Warn;
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		var l = p.logger().string("hero", "teg");
+		_ = l.level(logz.Level.Warn);
+		try l.logTo(out.writer());
+		try t.expectString("@ts=9999999999999 @l=WARN hero=teg\n", out.items);
+	}
+
+	{
+		// delayed level, under min
+		out.clearRetainingCapacity();
+		min_config.level = .Warn;
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		var l = p.logger().string("hero", "teg");
+		l.level(logz.Level.Info).done();
+		try l.logTo(out.writer());
+		try t.expectString("", out.items);
+	}
+}
+
+test "pool: loggerL" {
+	const min_config = Config{.pool_size = 1, .buffer_size = 100};
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	{
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		try p.loggerL(.Warn).string("hero", "teg").logTo(out.writer());
+
+		try t.expectString("@ts=9999999999999 @l=WARN hero=teg\n", out.items);
+	}
+
+	{
+		out.clearRetainingCapacity();
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		var logger = p.loggerL(.Warn).string("hero", "teg");
+		logger.level(.Error).done();
+		try logger.logTo(out.writer());
+		try t.expectString("@ts=9999999999999 @l=ERROR hero=teg\n", out.items);
+	}
+}
+
+test "pool: logfmt log" {
+	var min_config = Config{.pool_size = 1, .buffer_size = 100};
 	var out = std.ArrayList(u8).init(t.allocator);
 	defer out.deinit();
 
@@ -439,6 +537,10 @@ test "pool: log to kv" {
 		out.clearRetainingCapacity();
 		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
 		try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.logger().string("aaa", "zz2zz").logTo(out.writer());
+		try t.expectString("@ts=9999999999999 aaa=zz2zz\n", out.items);
 	}
 
 	{
@@ -468,118 +570,11 @@ test "pool: log to kv" {
 	}
 }
 
-test "pool: log to json" {
-	var min_config = Config{.pool_size = 1, .max_size = 100, .encoding = .json};
+test "pool: logfmt prefix" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	defer out.deinit();
 
-	{
-		min_config.level = .Debug;
-		var p = try Pool.init(t.allocator, min_config);
-		defer p.deinit();
-
-		try p.debug().int("a", 1).logTo(out.writer());
-		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"DEBUG\", \"a\":1}\n", out.items);
-
-		out.clearRetainingCapacity();
-		try p.info().int("a", 2).logTo(out.writer());
-		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"INFO\", \"a\":2}\n", out.items);
-
-		out.clearRetainingCapacity();
-		try p.warn().int("a", 333).logTo(out.writer());
-		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"WARN\", \"a\":333}\n", out.items);
-
-		out.clearRetainingCapacity();
-		try p.err().int("a", 4444).logTo(out.writer());
-		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"ERROR\", \"a\":4444}\n", out.items);
-
-		out.clearRetainingCapacity();
-		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
-		try t.expectString("{\"@ts\":9999999999999, \"@l\":\"FATAL\", \"aaa\":\"zzzz\"}\n", out.items);
-	}
-}
-
-test "pool: logger" {
-	var min_config = Config{.pool_size = 1, .max_size = 100};
-	var out = std.ArrayList(u8).init(t.allocator);
-	defer out.deinit();
-
-	{
-		var p = try Pool.init(t.allocator, min_config);
-		defer p.deinit();
-
-		try p.logger().string("hero", "teg").logTo(out.writer());
-		try t.expectString("@ts=9999999999999 hero=teg\n", out.items);
-	}
-
-	{
-		out.clearRetainingCapacity();
-		var p = try Pool.init(t.allocator, min_config);
-		defer p.deinit();
-
-		var l = p.logger().string("hero", "teg");
-		try l.logTo(out.writer());
-		try t.expectString("@ts=9999999999999 hero=teg\n", out.items);
-	}
-
-	{
-		// delayed level, above min
-		out.clearRetainingCapacity();
-		min_config.level = .Warn;
-		var p = try Pool.init(t.allocator, min_config);
-		defer p.deinit();
-
-		var l = p.logger().string("hero", "teg");
-		_ = l.level(logz.Level.Warn);
-		try l.logTo(out.writer());
-		try t.expectString("@ts=9999999999999 @l=WARN hero=teg\n", out.items);
-	}
-
-	{
-		// delayed level, under min
-		out.clearRetainingCapacity();
-		min_config.level = .Warn;
-		var p = try Pool.init(t.allocator, min_config);
-		defer p.deinit();
-
-		var l = p.logger().string("hero", "teg");
-		l.level(logz.Level.Info).done();
-		try l.logTo(out.writer());
-		try t.expectString("", out.items);
-	}
-}
-
-test "pool: loggerL" {
-	const min_config = Config{.pool_size = 1, .max_size = 100};
-	var out = std.ArrayList(u8).init(t.allocator);
-	defer out.deinit();
-
-	{
-		var p = try Pool.init(t.allocator, min_config);
-		defer p.deinit();
-
-		try p.loggerL(.Warn).string("hero", "teg").logTo(out.writer());
-
-		try t.expectString("@ts=9999999999999 @l=WARN hero=teg\n", out.items);
-	}
-
-	{
-		out.clearRetainingCapacity();
-		var p = try Pool.init(t.allocator, min_config);
-		defer p.deinit();
-
-		var logger = p.loggerL(.Warn).string("hero", "teg");
-		logger.level(.Error).done();
-		try logger.logTo(out.writer());
-		try t.expectString("@ts=9999999999999 @l=ERROR hero=teg\n", out.items);
-	}
-}
-
-test "pool: prefix" {
-	var out = std.ArrayList(u8).init(t.allocator);
-	defer out.deinit();
-
-	var p = try Pool.init(t.allocator, .{.pool_size = 2, .max_size = 100, .prefix = "Keemun"});
+	var p = try Pool.init(t.allocator, .{.pool_size = 2, .buffer_size = 100, .prefix = "Keemun "});
 	defer p.deinit();
 
 	// we want to make sure dynamically allocated loggers also get the prefix
@@ -608,11 +603,11 @@ test "pool: prefix" {
 	try t.expectString("Keemun @ts=9999999999999 @l=INFO id=5\n", out.items);
 }
 
-test "pool: multiuse" {
+test "pool: logfmt multiuse" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	defer out.deinit();
 
-	var p = try Pool.init(t.allocator, .{.pool_size = 2, .max_size = 100});
+	var p = try Pool.init(t.allocator, .{.pool_size = 2, .buffer_size = 100});
 	defer p.deinit();
 
 	{
@@ -648,11 +643,11 @@ test "pool: multiuse" {
 	}
 }
 
-test "pool: multiuse with prefix" {
+test "pool: logfmt multiuse with prefix" {
 	var out = std.ArrayList(u8).init(t.allocator);
 	defer out.deinit();
 
-	var p = try Pool.init(t.allocator, .{.pool_size = 2, .max_size = 100, .prefix = "silver=needle"});
+	var p = try Pool.init(t.allocator, .{.pool_size = 2, .buffer_size = 100, .prefix = "silver=needle "});
 	defer p.deinit();
 
 	{
@@ -683,6 +678,156 @@ test "pool: multiuse with prefix" {
 		logger.level(.Warn).done();
 		try logger.logTo(out.writer());
 		try t.expectString("silver=needle @ts=9999999999999 @l=WARN rid=req1 x=5\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+		logger.release();
+	}
+}
+
+test "pool: json log" {
+	var min_config = Config{.pool_size = 1, .buffer_size = 100, .encoding = .json};
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	{
+		min_config.level = .Debug;
+		var p = try Pool.init(t.allocator, min_config);
+		defer p.deinit();
+
+		try p.debug().int("a", 1).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"@l\":\"DEBUG\",\"a\":1}\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.info().int("a", 2).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"@l\":\"INFO\",\"a\":2}\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.warn().int("a", 333).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"@l\":\"WARN\",\"a\":333}\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.err().int("a", 4444).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"@l\":\"ERROR\",\"a\":4444}\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.fatal().string("aaa", "zzzz").logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"@l\":\"FATAL\",\"aaa\":\"zzzz\"}\n", out.items);
+
+		out.clearRetainingCapacity();
+		try p.logger().string("aaa", "zzzz").logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"aaa\":\"zzzz\"}\n", out.items);
+	}
+}
+
+test "pool: json prefix" {
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	var p = try Pool.init(t.allocator, .{.pool_size = 2, .buffer_size = 100, .encoding = .json, .prefix = "{\"x\": 1,"});
+	defer p.deinit();
+
+	// we want to make sure dynamically allocated loggers also get the prefix
+	var l1 = p.info().int("id", 1);
+	var l2 = p.info().int("id", 2);
+	var l3 = p.info().int("id", 3);
+
+	try l1.logTo(out.writer());
+	try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":1}\n", out.items);
+
+	out.clearRetainingCapacity();
+	try l2.logTo(out.writer());
+	try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":2}\n", out.items);
+
+	out.clearRetainingCapacity();
+	try l3.logTo(out.writer());
+	try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":3}\n", out.items);
+
+	// and the prefix remains after being released and re-acquired
+	out.clearRetainingCapacity();
+	try p.info().int("id", 4).logTo(out.writer());
+	try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":4}\n", out.items);
+
+	out.clearRetainingCapacity();
+	try p.info().int("id", 5).logTo(out.writer());
+	try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":5}\n", out.items);
+}
+
+test "pool: json multiuse" {
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	var p = try Pool.init(t.allocator, .{.pool_size = 2, .encoding = .json, .buffer_size = 100});
+	defer p.deinit();
+
+	{
+		// no extra data (why?)
+		var logger = p.loggerL(.Info).multiuse();
+		try logger.int("x", 4).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"@l\":\"INFO\",\"x\":4}\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+
+		out.clearRetainingCapacity();
+		_ = logger.int("x", 5);
+		logger.level(.Warn).done();
+		try logger.logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"@l\":\"WARN\",\"x\":5}\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+		logger.release();
+	}
+
+	{
+		out.clearRetainingCapacity();
+		var logger = p.loggerL(.Info).stringSafe("rid", "req1").multiuse();
+		try logger.int("x", 4).logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"@l\":\"INFO\",\"rid\":\"req1\",\"x\":4}\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+
+		out.clearRetainingCapacity();
+		_ = logger.int("x", 5);
+		logger.level(.Warn).done();
+		try logger.logTo(out.writer());
+		try t.expectString("{\"@ts\":9999999999999,\"@l\":\"WARN\",\"rid\":\"req1\",\"x\":5}\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+		logger.release();
+	}
+}
+
+test "pool: json multiuse with prefix" {
+	var out = std.ArrayList(u8).init(t.allocator);
+	defer out.deinit();
+
+	var p = try Pool.init(t.allocator, .{.pool_size = 2, .buffer_size = 100, .encoding = .json, .prefix = "silver=needle "});
+	defer p.deinit();
+
+	// the caller is responsible for making sure the prefix begins a valid json object
+
+	{
+		// no extra data (why?)
+		var logger = p.loggerL(.Info).multiuse();
+		try logger.int("x", 4).logTo(out.writer());
+		try t.expectString("silver=needle  \"@ts\":9999999999999,\"@l\":\"INFO\",\"x\":4}\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+
+		out.clearRetainingCapacity();
+		_ = logger.int("x", 5);
+		_ = logger.level(.Warn);
+		try logger.logTo(out.writer());
+		try t.expectString("silver=needle  \"@ts\":9999999999999,\"@l\":\"WARN\",\"x\":5}\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+		logger.release();
+	}
+
+	{
+		out.clearRetainingCapacity();
+		var logger = p.loggerL(.Info).stringSafe("rid", "req1").multiuse();
+		try logger.int("x", 4).logTo(out.writer());
+		try t.expectString("silver=needle  \"@ts\":9999999999999,\"@l\":\"INFO\",\"rid\":\"req1\",\"x\":4}\n", out.items);
+		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
+
+		out.clearRetainingCapacity();
+		_ = logger.int("x", 5);
+		logger.level(.Warn).done();
+		try logger.logTo(out.writer());
+		try t.expectString("silver=needle  \"@ts\":9999999999999,\"@l\":\"WARN\",\"rid\":\"req1\",\"x\":5}\n", out.items);
 		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 		logger.release();
 	}

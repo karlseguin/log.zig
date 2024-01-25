@@ -10,21 +10,7 @@ pub const expectString = std.testing.expectEqualStrings;
 pub const expectSuffix = std.testing.expectStringEndsWith;
 pub const expectPrefix = std.testing.expectStringStartsWith;
 
-pub fn expectJson(actual: []const u8, expected: anytype) !void {
-	var jc = JsonComparer.init();
-	defer jc.deinit();
-	const diffs = try jc.compare(expected, actual);
-	if (diffs.items.len == 0) {
-		return;
-	}
-
-	for (diffs.items, 0..) |diff, i| {
-		std.debug.print("\n==Difference #{d}==\n", .{i+1});
-		std.debug.print("  {s}: {s}\n  Left: {s}\n  Right: {s}\n", .{ diff.path, diff.err, diff.a, diff.b});
-		std.debug.print("  Actual:\n    {s}\n", .{actual});
-	}
-	return error.JsonNotEqual;
-}
+pub var out_mutex = std.Thread.Mutex{};
 
 pub fn getRandom() std.rand.DefaultPrng {
 	var seed: u64 = undefined;
@@ -38,7 +24,7 @@ pub fn timestamp() i64 {
 
 pub const is_test = @import("builtin").is_test;
 
-const JsonComparer = struct {
+pub const JsonComparer = struct {
 	_arena: std.heap.ArenaAllocator,
 
 	const Diff = struct {
@@ -49,20 +35,20 @@ const JsonComparer = struct {
 	};
 	const Diffs = std.ArrayList(Diff);
 
-	fn init() JsonComparer {
+	pub fn init() JsonComparer {
 		return .{
 			._arena = std.heap.ArenaAllocator.init(allocator),
 		};
 	}
 
-	fn deinit(self: JsonComparer) void {
+	pub fn deinit(self: JsonComparer) void {
 		self._arena.deinit();
 	}
 
 	// We compare by getting the string representation of a and b
 	// and then parsing it into a std.json.ValueTree, which we can compare
 	// Either a or b might already be serialized JSON string.
-	fn compare(self: *JsonComparer, a: anytype, b: anytype) !Diffs {
+	pub fn compare(self: *JsonComparer, a: anytype, b: anytype) !Diffs {
 		const aa = self._arena.allocator();
 		var a_bytes: []const u8 = undefined;
 		if (@TypeOf(a) != []const u8) {

@@ -23,7 +23,7 @@ pub const Pool = struct {
 	available: usize,
 	loggers: []Logger,
 	allocator: Allocator,
-	empty: Config.PoolEmpty,
+	strategy: Config.PoolStrategy,
 	buffer_pool: BufferPool,
 
 	pub fn init(allocator: Allocator, config: Config) !*Pool {
@@ -46,7 +46,7 @@ pub const Pool = struct {
 			.available = size,
 			.allocator = allocator,
 			.buffer_pool = buffer_pool,
-			.empty = config.pool_empty,
+			.strategy = config.pool_strategy,
 			.level = @intFromEnum(config.level),
 		};
 
@@ -84,7 +84,7 @@ pub const Pool = struct {
 			// dont hold the lock over factory
 			self.pool_mutex.unlock();
 
-			if (self.empty == .noop) {
+			if (self.strategy == .noop) {
 				return logz.noop;
 			}
 
@@ -308,7 +308,7 @@ test "pool: acquire and release" {
 
 test "pool: empty noop" {
 	// not 100% sure this is testing exactly what I want, but it's ....something ?
-	const min_config = Config{.pool_size = 2, .buffer_size = 1, .pool_empty = .noop};
+	const min_config = Config{.pool_size = 2, .buffer_size = 1, .pool_strategy = .noop};
 	var p = try Pool.init(t.allocator, min_config);
 	defer p.deinit();
 

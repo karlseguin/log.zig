@@ -409,7 +409,7 @@ pub const LogFmt = struct {
 				// buffer, and the 'n' is the first byte of larger. This is necessary
 				// because other parts of the code assume static is _always_ fully filled
 				// if a larger buffer was acquired.
-				const larger = buffer.pool.acquireLarge() orelse return error.NoSpaceLeft;
+				const larger = (buffer.pool.acquireLarge() catch return error.NoSpaceLeft) orelse return error.NoSpaceLeft;
 				var written = WriteEscapeResult{};
 				if (available > 0) {
 					var buf = buffer.buf;

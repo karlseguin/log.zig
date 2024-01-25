@@ -1,6 +1,6 @@
 Structured Logging for Zig
 
-logz is an opinionated structured logger that outputs to stdout or stderr using logfmt or JSON. It aims to minimize runtime memory allocation by using a pool of pre-allocated loggers. 
+logz is an opinionated structured logger that outputs to stdout, stderr or a custom writer using logfmt or JSON. It aims to minimize runtime memory allocation by using a pool of pre-allocated loggers. 
 
 # Metrics
 If you're looking for metrics, check out my <a href="https://github.com/karlseguin/metrics.zig">prometheus library for Zig</a>.
@@ -16,7 +16,9 @@ For simple cases, a global logging pool can be configured and used:
 try logz.setup(allocator, .{
     .level = .Warn, 
     .pool_size = 100,
-    .max_size = 4096, 
+    .buffer_size = 4096, 
+    .large_pool_count = 8,
+    .large_pool_size = 16384,
 });
 
 // other places in your code
@@ -43,9 +45,8 @@ requestLogs.err().
 
 # Important Notes
 1. Attribute keys are never escaped. logz assumes that attribute keys can be written as is.
-2. Logz will silently truncate attributes if the log entry exceeds the configured `max_size`. This truncation only happens at the attribute level (not in the middle of a key or value), thus either the whole key=value is written or none of it is.
-3. Depending on the `pool_empty` configuration, when empty the pool will either dynamically create a logger (`.pool_empty = .create`) or return a noop logger (`.pool_empty = .noop)`. If creation fails, a noop logger will be return and an error is written using `std.log.err`. When `.pool_empty = .noop`, then there will be no memory allocations made after `Pool.init` returns.
-
+2. Logz can silently drop attributes from a log entry. This only happens when the attribute exceeds the configured sized (either of the buffer or the buffer + large_buffer) or a large buffer couldn't be created.
+3. Depending on the `pool_strategy` configuration, when empty the pool will either dynamically create a logger (`.pool_strategy = .create`) or return a noop logger (`.pool_strategy = .noop)`. If creation fails, a noop logger will be return and an error is written using `std.log.err`.
 ## Pools and Loggers
 Pools are thread-safe.
 
@@ -125,13 +126,12 @@ pub const Config = struct {
 
     // Controls what the pool does when empty. It can either dynamically create
     // a new Logger, or return the Noop logger.
-    pool_empty: PoolEmpty = .create, 
+    pool_startegy: .create, // or .noop
 
-    // The maximum size, in bytes, that each log entry can be.
-    // Writing more data than max_size will truncate the log at a key=value 
-    // boundary (in other words, you won't get a key or value randomly 
-    // truncated, either the entire key=value is written, or it isn't)
-    max_size: usize = 4096,
+    // Each logger in the pool is configured with a static buffer of this size.
+    // An entry that exceeds this size will attempt to expand into the 
+    // large buffer pool. Failing this, attributes will be dropped
+    buffer_size: usize = 4096,
 
     // The minimum log level to log. `.None` disables all logging
     level: logz.Level = .Info,
@@ -143,7 +143,17 @@ pub const Config = struct {
     // Where to write the output: can be either .stdout or .stderr
     output: Output = .stdout,
 
-    encoding: Encoding = .kv, // or .json
+    encoding: Encoding = .logfmt, // or .json
+
+    // How many large buffers to create
+    large_buffer_count: u16 = 8,
+
+    // Size of large buffers.
+    large_buffer_size: usize = 16384,
+
+    // Controls what the large buffer pool does when empty. It can either 
+    // dynamically create a large buffer, or drop the attribute
+    large_buffer_startegy: .create, // or .drop
 };
 ```
 
@@ -312,6 +322,22 @@ errdefer |err| _ = logger.err(err).level(.Fatal);
 
 return zqlite.open(path, true);
 ```
+
+### Allocations
+When configured with `.pool_strategy = .noop` and `.large_buffer_strategy = .drop`, the logger will not allocate memory after the pool is initialized.
+
+### Maximum Log Line Size
+The maximum possible log entry is: `config.prefix.len + config.buffer_size + config.large_buffer_size + ~35`.  
+
+Th last 35 bytes is for the the @ts and @l attributes, and the trailing newline. The exact length of these can vary by a few bytes (e.g. the json encoder takes a few additional bytes to quote the key).
+
+### Custom Output
+The `logTo(writer: anytype)` can be called instead of `log()`. The writer must expose 2 methods:
+
+* `writeAll(self: Self, data: []const u8) !void`
+* `writeByte(self: Self, b: u8) !void`
+
+A single call to `logTo()` can result in multiple calls to `writeAll` / `writeByte`. `logTo` uses a mutex to ensure that a single entry is written to the writer at a time.
 
 ## Testing
 When testing, I recommend you do the following in your main test entry:

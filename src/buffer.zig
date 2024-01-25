@@ -49,7 +49,7 @@ pub const Buffer = struct {
 		switch (self.sizeCheck(data.len)) {
 			.buf => self.writeAllBuf(data),
 			.acquire_large => |available| {
-				const larger = self.pool.acquireLarge() orelse return error.NoSpaceLeft;
+				const larger = (self.pool.acquireLarge() catch return error.NoSpaceLeft) orelse return error.NoSpaceLeft;
 
 				const pos = self.pos;
 				const buf = self.buf;
@@ -81,7 +81,7 @@ pub const Buffer = struct {
 			return error.NoSpaceLeft;
 		}
 
-		const large = self.pool.acquireLarge() orelse return error.NoSpaceLeft;
+		const large = (self.pool.acquireLarge() catch return error.NoSpaceLeft) orelse return error.NoSpaceLeft;
 		large[0] = b;
 		self.buf = large;
 		self.pos = 1;
@@ -99,7 +99,7 @@ pub const Buffer = struct {
 				self.pos = pos + n;
 			},
 			.acquire_large => |available| {
-				const larger = self.pool.acquireLarge() orelse return error.NoSpaceLeft;
+				const larger = (self.pool.acquireLarge() catch return error.NoSpaceLeft) orelse return error.NoSpaceLeft;
 
 				for (0..available) |i| {
 					buf[pos+i] = b;
@@ -344,6 +344,7 @@ pub const Pool = struct {
 	allocator: Allocator,
 	buffer_size: usize,
 	large_buffer_size: usize,
+	strategy: Config.LargeBufferStrategy,
 
 	pub fn init(allocator: Allocator, config: *const Config) !Pool {
 		const large_buffer_size = config.large_buffer_size;
@@ -369,6 +370,7 @@ pub const Pool = struct {
 			.allocator = allocator,
 			.available = large_buffer_count,
 			.buffer_size = config.buffer_size,
+			.strategy = if (large_buffer_count == 0) .drop else config.large_buffer_strategy,
 			.large_buffer_size = if (large_buffer_count == 0) 0 else large_buffer_size,
 		};
 	}
@@ -391,15 +393,19 @@ pub const Pool = struct {
 		};
 	}
 
-	pub fn acquireLarge(self: *Pool) ?[]u8 {
+	pub fn acquireLarge(self: *Pool) !?[]u8 {
 		const buffers = self.buffers;
 
 		self.mutex.lock();
 		const available = self.available;
 		if (available == 0) {
 			self.mutex.unlock();
-			return null;
+			if (self.strategy == .drop) {
+				return null;
+			}
+			return try self.allocator.alloc(u8, self.large_buffer_size);
 		}
+
 		const index = available - 1;
 		const buf = buffers[index];
 		self.available = index;
@@ -412,6 +418,11 @@ pub const Pool = struct {
 
 		self.mutex.lock();
 		const available = self.available;
+		if (available == buffers.len) {
+			self.mutex.unlock();
+			self.allocator.free(buf);
+			return;
+		}
 		buffers[available] = buf;
 		self.available = available + 1;
 		self.mutex.unlock();
@@ -433,26 +444,52 @@ test "pool: create" {
 	try t.expectEqual(true, b.pool == &p);
 }
 
-test "pool: acquire and release" {
-	var p = try Pool.init(t.allocator, &.{.large_buffer_count = 2, .large_buffer_size = 15, .buffer_size = 10});
+test "pool: acquire and release with drop strategy" {
+	var p = try Pool.init(t.allocator, &.{.large_buffer_count = 2, .large_buffer_size = 15, .buffer_size = 10, .large_buffer_strategy = .drop});
 	defer p.deinit();
 
-	const i1a = p.acquireLarge() orelse unreachable;
+	const i1a = (try p.acquireLarge()) orelse unreachable;
 	try t.expectEqual(15, i1a.len);
-	const i2a = p.acquireLarge() orelse unreachable;
+	const i2a = (try p.acquireLarge()) orelse unreachable;
 	try t.expectEqual(15, i2a.len);
 
 	try t.expectEqual(false, i1a.ptr == i2a.ptr);
 
-	try t.expectEqual(null, p.acquireLarge());
+	try t.expectEqual(null, (try p.acquireLarge()));
 
 	p.releaseLarge(i1a);
-	const i1b = p.acquireLarge() orelse unreachable;
+	const i1b = (try p.acquireLarge()) orelse unreachable;
 	try t.expectEqual(15, i1b.len);
 	try t.expectEqual(true, i1a.ptr == i1b.ptr);
 
 	p.releaseLarge(i2a);
 	p.releaseLarge(i1b);
+}
+
+test "pool: acquire and release with create strategy" {
+	var p = try Pool.init(t.allocator, &.{.large_buffer_count = 2, .large_buffer_size = 15, .buffer_size = 10});
+	defer p.deinit();
+
+	const i1a = (try p.acquireLarge()) orelse unreachable;
+	try t.expectEqual(15, i1a.len);
+	const i2a = (try p.acquireLarge()) orelse unreachable;
+	try t.expectEqual(15, i2a.len);
+
+	const i3a = (try p.acquireLarge()) orelse unreachable;
+	try t.expectEqual(15, i2a.len);
+
+	try t.expectEqual(false, i1a.ptr == i2a.ptr);
+	try t.expectEqual(false, i1a.ptr == i3a.ptr);
+	try t.expectEqual(false, i2a.ptr == i3a.ptr);
+
+	p.releaseLarge(i1a);
+	const i1b = (try p.acquireLarge()) orelse unreachable;
+	try t.expectEqual(15, i1b.len);
+	try t.expectEqual(true, i1a.ptr == i1b.ptr);
+
+	p.releaseLarge(i2a);
+	p.releaseLarge(i1b);
+	p.releaseLarge(i3a);
 }
 
 test "pool: threadsafety" {
@@ -476,7 +513,7 @@ fn testPool(p: *Pool) void {
 	const random = r.random();
 
 	for (0..5000) |_| {
-		var buf = p.acquireLarge() orelse unreachable;
+		var buf = p.acquireLarge() catch unreachable orelse unreachable;
 		// no other thread should have set this to 255
 		std.debug.assert(buf[0] == 0);
 

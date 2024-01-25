@@ -7,9 +7,10 @@ pub const Config = struct {
 	prefix: ?[]const u8 = null,
 	output: Output = .stdout,
 	encoding: Encoding = .logfmt,
-	pool_empty: PoolEmpty = .create,
+	pool_strategy: PoolStrategy = .create,
 	large_buffer_count: u16 = 8,
 	large_buffer_size: usize = 16384,
+	large_buffer_strategy: LargeBufferStrategy = .create,
 
 	pub const Output = enum {
 		stdout,
@@ -21,8 +22,13 @@ pub const Config = struct {
 		logfmt,
 	};
 
-	pub const PoolEmpty = enum {
+	pub const PoolStrategy = enum {
 		create,
 		noop,
+	};
+
+	pub const LargeBufferStrategy = enum {
+		create,
+		drop,
 	};
 };

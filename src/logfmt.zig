@@ -103,19 +103,14 @@ pub const LogFmt = struct {
 		// + 1 for the equal
 		// + 2 for the quotes
 		// + 1 for the trailing space
-		const to_write = 4 + key.len + encoded_len;
-
-		var buffer = &self.buffer;
-		if (buffer.sizeCheck(to_write) == .none) {
-			// we don't have space for this key=>pair
+		var aw = self.buffer.attributeWriter(4 + key.len + encoded_len, true) orelse return;
+		aw.writeAllAll(key, "=\"");
+		self.writeEscapeValue(value, ea.count) catch {
+			aw.rollback();
 			return;
-		}
-
-		buffer.writeAll(key) catch unreachable;
-		buffer.writeByte('=') catch unreachable;
-		buffer.writeByte('"') catch unreachable;
-		self.writeEscapeValue(value, ea.count) catch unreachable;
-		buffer.writeAll("\" ") catch unreachable;
+		};
+		aw.writeAll("\" ");
+		aw.done();
 	}
 
 	pub fn fmt(self: *LogFmt, key: []const u8, comptime format: []const u8, values: anytype) void {
@@ -240,16 +235,9 @@ pub const LogFmt = struct {
 			return;
 		};
 
-		var buffer = &self.buffer;
-		const enc_len = b64.calcSize(value.len);
-
 		// + 2 for the '=' and the trailing space
-		if (buffer.sizeCheck(2 + key.len + enc_len) == .none) {
-			return;
-		}
-
-		buffer.writeAll(key) catch unreachable;
-		buffer.writeByte('=') catch unreachable;
+		var aw = self.buffer.attributeWriter(2 + key.len + b64.calcSize(value.len), true) orelse return;
+		aw.writeAllB(key, '=');
 
 		var pos: usize = 0;
 		var end: usize = 12;
@@ -258,14 +246,15 @@ pub const LogFmt = struct {
 			_ = b64.encode(&scratch, value[pos..end]);
 			pos = end;
 			end += 12;
-			buffer.writeAll(&scratch) catch unreachable;
+			aw.writeAll(&scratch);
 		}
 
 		if (pos < value.len) {
 			const leftover = b64.encode(&scratch, value[pos..]);
-			buffer.writeAll(leftover) catch unreachable;
+			aw.writeAll(leftover);
 		}
-		buffer.writeByte(' ') catch unreachable;
+		aw.writeByte(' ');
+		aw.done();
 	}
 
 	pub fn err(self: *LogFmt, value: anyerror) void {
@@ -376,13 +365,24 @@ pub const LogFmt = struct {
 
 	fn startKeyValue(self: *LogFmt, key: []const u8) ?Buffer.RewindState {
 		var buffer = &self.buffer;
-		if (buffer.sizeCheck(key.len + 2) == .none) {
-			return null;
-		}
 
 		const rewind = buffer.begin();
-		buffer.writeAll(key) catch unreachable;
-		buffer.writeByte('=') catch unreachable;
+		switch (buffer.sizeCheck(key.len + 2)) {
+			.none => return null,
+			.buf => {
+				// optimize this common case
+				buffer.writeAllBuf(key);
+				buffer.writeByteBuf('=');
+			},
+			.acquire_large => {
+				buffer.writeAll(key) catch return null;
+				buffer.writeByte('=') catch {
+					buffer.rollback(rewind);
+					return null;
+				};
+			},
+		}
+
 		return rewind;
 	}
 
@@ -474,19 +474,12 @@ pub const LogFmt = struct {
 	}
 
 	fn writeKeyValue(self: *LogFmt, key: []const u8, value: []const u8) void {
-		var buffer = &self.buffer;
-
-		// + 1 for a space after the value
-		// + 1 for the equal sign
-		const to_write = 2 + key.len + value.len;
-		if (buffer.sizeCheck(to_write) == .none) {
-			return;
-		}
-
-		buffer.writeAll(key) catch unreachable;
-		buffer.writeByte('=') catch unreachable;
-		buffer.writeAll(value) catch unreachable;
-		buffer.writeByte(' ') catch unreachable;
+		// +1 for the equal sign
+		// +1 for the trailing space
+		var aw = self.buffer.attributeWriter(2 + key.len + value.len, true) orelse return;
+		aw.writeAllB(key, '=');
+		aw.writeAllB(value, ' ');
+		aw.done();
 	}
 
 	const EscapeAnalysis = struct {

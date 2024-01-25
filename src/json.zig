@@ -103,8 +103,10 @@ pub const Json = struct {
 
 		var buffer = &self.buffer;
 
-		// the +2 above guarantees this will work
-		buffer.writeByte('"') catch unreachable;
+		buffer.writeByte('"') catch {
+			buffer.rollback(rewind);
+			return;
+		};
 
 		std.fmt.format(FmtWriter{.buffer = &self.buffer}, format, values) catch {
 			buffer.rollback(rewind);
@@ -132,14 +134,15 @@ pub const Json = struct {
 			return;
 		};
 
-		// + 2 for the quote around the value, which startKeyValue doesn't add
-		// since it can be used for non-string values
-		// But startKeyValue DOES include the trailing comma
-		_ = self.startKeyValue(key, value.len + 2) orelse return;
-		var buffer = &self.buffer;
-		buffer.writeByte('"') catch unreachable;
-		buffer.writeAll(value) catch unreachable;
-		buffer.writeAll("\",") catch unreachable;
+		// + 2 for the quotes around the key
+		// + 2 for the quotes around the value
+		// + 1 fo rthe comma
+		// + 1 for the trailing comma
+		var aw = self.buffer.attributeWriter(6 + key.len + value.len, true) orelse return;
+		aw.writeByte('"');
+		aw.writeAllAll(key, "\":\"");
+		aw.writeAllAll(value, "\",");
+		aw.done();
 	}
 
 	// cases where the caller is sure value does not need to be encoded
@@ -217,13 +220,18 @@ pub const Json = struct {
 			else => value,
 		};
 
+		const l: usize = if (b) 4 else 5;
+		// + 2 for the quotes around the key
+		// + 1 for the colon
+		// + 1 for the trailing comma
+		var aw = self.buffer.attributeWriter(4 + key.len + l, true) orelse return;
+		aw.writeByte('"');
 		if (b) {
-			_ = self.startKeyValue(key, 4) orelse return;
-			self.buffer.writeAll("true,") catch unreachable;
+			aw.writeAllAll(key, "\":true,");
 		} else {
-			_ = self.startKeyValue(key, 5) orelse return;
-			self.buffer.writeAll("false,") catch unreachable;
+			aw.writeAllAll(key, "\":false,");
 		}
+		aw.done();
 	}
 
 	pub fn binary(self: *Json, key: []const u8, nvalue: ?[]const u8) void {
@@ -232,19 +240,12 @@ pub const Json = struct {
 			return;
 		};
 
-		var buffer = &self.buffer;
-		const enc_len = b64.calcSize(value.len);
-
 		// + 4 for the quotes around the key and value
 		// + 1 for the colon
 		// + 1 for the trailing comma
-		if (buffer.sizeCheck(6 + key.len + enc_len) == .none) {
-			return;
-		}
-
-		buffer.writeByte('"') catch unreachable;
-		buffer.writeAll(key) catch unreachable;
-		buffer.writeAll("\":\"") catch unreachable;
+		var aw = self.buffer.attributeWriter(6 + key.len + b64.calcSize(value.len), true) orelse return;
+		aw.writeByte('"');
+		aw.writeAllAll(key, "\":\"");
 
 		var pos: usize = 0;
 		var end: usize = 12;
@@ -253,14 +254,15 @@ pub const Json = struct {
 			_ = b64.encode(&scratch, value[pos..end]);
 			pos = end;
 			end += 12;
-			buffer.writeAll(&scratch) catch unreachable;
+			aw.writeAll(&scratch);
 		}
 
 		if (pos < value.len) {
 			const leftover = b64.encode(&scratch, value[pos..]);
-			buffer.writeAll(leftover) catch unreachable;
+			aw.writeAll(leftover);
 		}
-		buffer.writeAll("\",") catch unreachable;
+		aw.writeAll("\",");
+		aw.done();
 	}
 
 	pub fn err(self: *Json, value: anyerror) void {
@@ -390,24 +392,40 @@ pub const Json = struct {
 
 	fn startKeyValue(self: *Json, key: []const u8, min_value_len: usize) ?Buffer.RewindState {
 		var buffer = &self.buffer;
-		// +2 for the quotes around the key
-		// +1 for the colon
-		// +1 for the trailing comma
-		if (buffer.sizeCheck(4 + key.len + min_value_len) == .none) {
-			return null;
+		const rewind = buffer.begin();
+		switch (buffer.sizeCheck(key.len + 4 + min_value_len)) {
+			.none => return null,
+			.buf => {
+				// optimize this common case
+				buffer.writeByteBuf('"');
+				buffer.writeAllBuf(key);
+				buffer.writeAllBuf("\":");
+			},
+			.acquire_large => {
+				buffer.writeByte('"') catch return null;
+				buffer.writeAll(key) catch {
+					buffer.rollback(rewind);
+					return null;
+				};
+				buffer.writeAll("\":") catch {
+					buffer.rollback(rewind);
+					return null;
+				};
+			},
 		}
 
-		const rewind = buffer.begin();
-		buffer.writeByte('"') catch unreachable;
-		buffer.writeAll(key) catch unreachable;
-		buffer.writeAll("\":") catch unreachable;
 		return rewind;
 	}
 
 	fn writeNull(self: *Json, key: []const u8) void {
-		// startKeyValue does consider the trailing comma
-		_ = self.startKeyValue(key, 4) orelse return;
-		self.buffer.writeAll("null,") catch unreachable;
+		// + 2 for the quotes around the key
+		// + 1 for the colon
+		// + 4 for null
+		// + 1 for the trailing comma
+		var aw = self.buffer.attributeWriter(8 + key.len, true) orelse return;
+		aw.writeByte('"');
+		aw.writeAllAll(key, "\":null,");
+		aw.done();
 	}
 
 	fn writeObject(self: *Json, key: []const u8, value: anytype) void {

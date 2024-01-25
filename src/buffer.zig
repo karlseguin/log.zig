@@ -21,6 +21,11 @@ pub const Buffer = struct {
 	// the pool to goto to get larger buffers
 	pool: *M.Pool,
 
+	// If writing any part of the attribute fails, this is the information we
+	// need to bring the buffer back to the state it was in before we started
+	// writing the attribute
+	rewind: ?RewindState = null,
+
 	pub const Pool = M.Pool;
 
 	pub fn reset(self: *Buffer, pos: usize) void {
@@ -41,18 +46,13 @@ pub const Buffer = struct {
 	}
 
 	pub fn writeAll(self: *Buffer, data: []const u8) !void {
-		const pos = self.pos;
-		const buf = self.buf;
-
 		switch (self.sizeCheck(data.len)) {
-			.buf => {
-				const end = pos + data.len;
-				@memcpy(buf[pos..end], data);
-				self.pos = end;
-				return;
-			},
+			.buf => self.writeAllBuf(data),
 			.acquire_large => |available| {
 				const larger = self.pool.acquireLarge() orelse return error.NoSpaceLeft;
+
+				const pos = self.pos;
+				const buf = self.buf;
 
 				// Copy what fits in our static buffer
 				@memcpy(buf[pos..], data[0..available]);
@@ -126,6 +126,36 @@ pub const Buffer = struct {
 		}
 	}
 
+	pub fn writeAllBuf(self: *Buffer, data: []const u8) void {
+		const pos = self.pos;
+		const end = pos + data.len;
+		@memcpy(self.buf[pos..end], data);
+		self.pos = end;
+	}
+
+	pub fn writeByteBuf(self: *Buffer, b: u8) void {
+		const pos = self.pos;
+		self.buf[pos] = b;
+		self.pos = pos + 1;
+	}
+
+	// Loggers won't partially write attributes (key=>value pairs). If we don't
+	// have enough space to write any part of the key, any part of the value or
+	// any delimiter, then the entire attribute is skipped. An AttributeWriter
+	// manages this rollback logic while exposing a normal write API
+	pub fn attributeWriter(self: *Buffer, len: usize, exact: bool) ?AttributeWriter {
+		switch (self.sizeCheck(len)) {
+			.none => return null,
+			else => |other| return .{
+				.buffer = self,
+				._rollback = false,
+				.initial_pos = self.pos,
+				.fits_in_buf = exact and other == .buf,
+				.initial_static = self.buf.ptr == self.static.ptr,
+			},
+		}
+	}
+
 	const SizeCheckResult = union(enum) {
 		// we have space for the requested data in the current buffer
 		buf: void,
@@ -180,6 +210,130 @@ pub const Buffer = struct {
 			}
 		}
 		self.pos = rewind.pos;
+	}
+};
+
+pub const AttributeWriter = struct {
+	buffer: *Buffer,
+
+	// should we rollback when done() is called
+	_rollback: bool,
+
+	// the position we were at before we started this attribute
+	initial_pos: usize,
+
+	// before we started this attribute, were we using the static buffer
+	initial_static: bool,
+
+	// There are cases where we know the full attribute will fit in buffer.buf.
+	// Namely, for any case where we know the length of the attribute, we can
+	// determine if it'll fit in buf, or if we'll need to acquire a larger buf
+	// Common case that's worth optimizing;
+	fits_in_buf: bool,
+
+	pub fn writeAll(self: *AttributeWriter, data: []const u8) void {
+		var buffer = self.buffer;
+		const pos = buffer.pos;
+		if (self.fits_in_buf) {
+			const end = pos + data.len;
+			@memcpy(buffer.buf[pos..end], data);
+			buffer.pos = end;
+			return;
+		}
+
+		buffer.writeAll(data) catch {
+			self._rollback = true;
+		};
+	}
+
+	// optimization for the common case that we have a string followed by a single byte
+	// (like a separator)
+	pub fn writeAllB(self: *AttributeWriter, data: []const u8, suffix: u8) void {
+		var buffer = self.buffer;
+		const pos = buffer.pos;
+		if (self.fits_in_buf) {
+			const end = pos + data.len;
+			@memcpy(buffer.buf[pos..end], data);
+			buffer.buf[end] = suffix;
+			buffer.pos = end + 1;
+			return;
+		}
+
+		buffer.writeAll(data) catch {
+			self._rollback = true;
+			return;
+		};
+
+		buffer.writeByte(suffix) catch {
+			self._rollback = true;
+			return;
+		};
+	}
+
+	// optimization for the common case that we have a string followed by another string
+	pub fn writeAllAll(self: *AttributeWriter, data: []const u8, suffix: []const u8) void {
+		var buffer = self.buffer;
+		const pos = buffer.pos;
+		if (self.fits_in_buf) {
+			const end1 = pos + data.len;
+			@memcpy(buffer.buf[pos..end1], data);
+
+			const end2 = end1 + suffix.len;
+			@memcpy(buffer.buf[end1..end2], suffix);
+			buffer.pos = end2;
+			return;
+		}
+
+		buffer.writeAll(data) catch {
+			self._rollback = true;
+			return;
+		};
+
+		buffer.writeAll(suffix) catch {
+			self._rollback = true;
+			return;
+		};
+	}
+
+	pub fn writeByte(self: *AttributeWriter, b: u8) void {
+		const pos = self.buffer.pos;
+		if (self.fits_in_buf) {
+			self.buffer.buf[pos] = b;
+			self.buffer.pos = pos + 1;
+			return;
+		}
+
+		self.buffer.writeByte(b) catch {
+			self._rollback = true;
+		};
+	}
+
+	pub fn rollback(self: *AttributeWriter) void {
+		self._rollback = true;
+		self.done();
+	}
+
+	pub fn done(self: *AttributeWriter) void {
+		if (self._rollback == false) {
+			return;
+		}
+
+		var buffer = self.buffer;
+		buffer.pos = self.initial_pos;
+		if (self.initial_static == false) {
+			// if we started this attribute with a large buffer, then we need to keep
+			// it around
+			return;
+		}
+
+		if (buffer.buf.ptr != buffer.static.ptr) {
+			// This is the only special case. When we began this operation, we
+			// were using the static buffer. However, during the operation, we acquired
+			// a large buffer. We need to release the large buffer and return to our
+			// static buffer.
+			buffer.pool.releaseLarge(buffer.buf);
+			buffer.buf = buffer.static;
+		}
 	}
 };
 

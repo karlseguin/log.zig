@@ -386,7 +386,7 @@ pub const Json = struct {
 		// now replace with our closing bracket
 		try out.writeAll(buf[0..pos]);
 		if (flush_newline) {
-			try out.writeByte('\n');
+			try out.writeAll("\n");
 		}
 	}
 

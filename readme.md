@@ -17,8 +17,8 @@ try logz.setup(allocator, .{
     .level = .Warn, 
     .pool_size = 100,
     .buffer_size = 4096, 
-    .large_pool_count = 8,
-    .large_pool_size = 16384,
+    .large_buffer_count = 8,
+    .large_buffer_size = 16384,
 });
 
 // other places in your code

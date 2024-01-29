@@ -4,13 +4,18 @@ pub const expect = std.testing.expect;
 pub const allocator = std.testing.allocator;
 
 pub const expectFmt = std.testing.expectFmt;
-pub const expectEqual = std.testing.expectEqual;
 pub const expectError = std.testing.expectError;
 pub const expectString = std.testing.expectEqualStrings;
 pub const expectSuffix = std.testing.expectStringEndsWith;
 pub const expectPrefix = std.testing.expectStringStartsWith;
 
 pub var out_mutex = std.Thread.Mutex{};
+
+// std.testing.expectEqual won't coerce expected to actual, which is a problem
+// when expected is frequently a comptime.
+pub fn expectEqual(expected: anytype, actual: anytype) !void {
+	return std.testing.expectEqual(@as(@TypeOf(actual), expected), actual);
+}
 
 pub fn getRandom() std.rand.DefaultPrng {
 	var seed: u64 = undefined;

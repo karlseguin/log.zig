@@ -1,3 +1,4 @@
+const std = @import("std");
 const logz = @import("logz.zig");
 
 pub const Config = struct {
@@ -12,9 +13,10 @@ pub const Config = struct {
 	large_buffer_size: usize = 16384,
 	large_buffer_strategy: LargeBufferStrategy = .create,
 
-	pub const Output = enum {
+	pub const Output = union(enum) {
 		stdout,
 		stderr,
+		file: []const u8,
 	};
 
 	pub const Encoding = enum {

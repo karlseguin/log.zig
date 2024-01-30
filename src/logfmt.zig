@@ -1,6 +1,7 @@
 const std = @import("std");
 const logz = @import("logz.zig");
 
+const Pool = @import("pool.zig").Pool;
 const Config = @import("config.zig").Config;
 const Buffer = @import("buffer.zig").Buffer;
 
@@ -28,26 +29,26 @@ pub const LogFmt = struct {
 
 	mutex: *Mutex,
 
-	pub fn init(allocator: Allocator, mutex: *Mutex, buffer: Buffer, config: *const Config) !LogFmt {
-		const meta_len = META_LEN + if (config.prefix) |p| p.len else 0;
+	pub fn init(allocator: Allocator, pool: *Pool) !LogFmt {
+		var buffer = try pool.buffer_pool.create();
+		errdefer buffer.deinit();
+
+		const meta_len = META_LEN + if (pool.config.prefix) |p| p.len else 0;
 
 		const meta = try allocator.alloc(u8, meta_len);
 		errdefer allocator.free(meta);
 
-		if (config.prefix) |prefix| {
+		if (pool.config.prefix) |prefix| {
 			@memcpy(meta[0..prefix.len], prefix);
 		}
 
 		return .{
 			.lvl = .None,
 			.meta = meta,
-			.mutex = mutex,
 			.buffer = buffer,
+			.out = pool.file,
 			.multiuse_length = null,
-			.out = switch (config.output) {
-				.stdout => std.io.getStdOut(),
-				.stderr => std.io.getStdErr(),
-			},
+			.mutex = &pool.log_mutex,
 		};
 	}
 
@@ -529,11 +530,10 @@ pub const LogFmt = struct {
 };
 
 test "logfmt: static buffer" {
-	// tests a buffer that can't grow beyond the initial static buffer
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 0, .buffer_size = 25});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .large_buffer_count = 0, .buffer_size = 25, .encoding = .logfmt});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	{
@@ -565,10 +565,10 @@ test "logfmt: static buffer" {
 }
 
 test "logfmt: large buffer" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 1, .large_buffer_size = 25, .buffer_size = 20});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .large_buffer_count = 1, .large_buffer_size = 25, .buffer_size = 25, .encoding = .logfmt});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	{
@@ -607,10 +607,10 @@ test "logfmt: large buffer" {
 }
 
 test "logfmt: buffer fuzz" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 1, .large_buffer_size = 25, .buffer_size = 10});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .large_buffer_count = 1, .large_buffer_size = 25, .buffer_size = 10, .encoding = .logfmt});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	const data = "1234567890ABCDEFGHIJKLMNOPQRSTUFWXYZ";
@@ -646,10 +646,10 @@ test "logfmt: buffer fuzz" {
 }
 
 test "logfmt: string" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 0, .buffer_size = 100});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .large_buffer_count = 0, .buffer_size = 100, .encoding = .logfmt});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	{
@@ -678,10 +678,10 @@ test "logfmt: string" {
 }
 
 test "logfmt: escape fuzz" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 1, .large_buffer_size = 10, .buffer_size = 20});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .large_buffer_count = 1, .large_buffer_size = 10, .buffer_size = 20, .encoding = .logfmt});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	const data = "1234567890ABCDEFGHIJKLMNOPQRSTUFWXYZ";
@@ -696,10 +696,10 @@ test "logfmt: escape fuzz" {
 }
 
 test "logfmt: stringZ" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 0, .buffer_size = 100});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 0, .buffer_size = 100,});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	{
@@ -723,10 +723,10 @@ test "logfmt: stringZ" {
 }
 
 test "logfmt: binary" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	{
@@ -752,10 +752,10 @@ test "logfmt: binary" {
 }
 
 test "logfmt: int" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 1, .large_buffer_size = 15, .buffer_size = 10});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 1, .large_buffer_size = 15, .buffer_size = 10});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	logfmt.int("key", 0);
@@ -789,10 +789,10 @@ test "logfmt: int" {
 }
 
 test "logfmt: int special values" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 0, .buffer_size = 100});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 0, .buffer_size = 100});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	// max-ish
@@ -809,10 +809,10 @@ test "logfmt: int special values" {
 }
 
 test "logfmt: bool null/true/false" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 0, .buffer_size = 20});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 0, .buffer_size = 20});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	logfmt.boolean("tea", true);
@@ -826,10 +826,10 @@ test "logfmt: bool null/true/false" {
 }
 
 test "logfmt: float" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 1, .large_buffer_size = 15, .buffer_size = 10});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 1, .large_buffer_size = 15, .buffer_size = 10});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	logfmt.float("key", 0);
@@ -863,10 +863,10 @@ test "logfmt: float" {
 }
 
 test "logfmt: error" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 0, .buffer_size = 100});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 0, .buffer_size = 100});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	{
@@ -882,10 +882,10 @@ test "logfmt: error" {
 }
 
 test "logfmt: ctx" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 0, .buffer_size = 100});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 0, .buffer_size = 100});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	logfmt.ctx("test.logfmt.ctx");
@@ -893,10 +893,10 @@ test "logfmt: ctx" {
 }
 
 test "logfmt: src" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 0, .buffer_size = 100});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 0, .buffer_size = 100});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	{
@@ -908,10 +908,10 @@ test "logfmt: src" {
 }
 
 test "logfmt: fmt" {
-	var bp = try Buffer.Pool.init(t.allocator, &.{.large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10});
-	defer bp.deinit();
+	const p = try Pool.init(t.allocator, .{.pool_size = 1, .encoding = .logfmt, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10});
+	defer p.deinit();
 
-	var logfmt = try LogFmt.init(t.allocator, &t.out_mutex, try bp.create(), &.{});
+	var logfmt = try LogFmt.init(t.allocator, p);
 	defer logfmt.deinit(t.allocator);
 
 	{

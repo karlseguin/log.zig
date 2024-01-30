@@ -26,6 +26,8 @@ pub const Pool = struct {
 	strategy: Config.PoolStrategy,
 	buffer_pool: BufferPool,
 
+	file: std.fs.File,
+
 	pub fn init(allocator: Allocator, config: Config) !*Pool {
 		const size = config.pool_size;
 
@@ -38,7 +40,26 @@ pub const Pool = struct {
 		const pool = try allocator.create(Pool);
 		errdefer allocator.destroy(pool);
 
+		const file = switch (config.output) {
+			.stderr => std.io.getStdErr(),
+			.stdout => std.io.getStdOut(),
+			.file => |path| blk: {
+				// createFile with truncate=false still truncates the file
+				// https://github.com/ziglang/zig/issues/14375
+
+				var f = std.fs.cwd().openFile(path, .{.mode = .read_write}) catch |open_err| switch (open_err) {
+					error.FileNotFound => break :blk try std.fs.cwd().createFile(path, .{}),
+					else => return open_err,
+				};
+
+				const stat = try f.stat();
+				try f.seekTo(stat.size);
+				break :blk f;
+			}
+		};
+
 		pool.* = .{
+			.file = file,
 			.log_mutex = .{},
 			.pool_mutex = .{},
 			.config = config,
@@ -72,6 +93,12 @@ pub const Pool = struct {
 		}
 		self.buffer_pool.deinit();
 		allocator.free(self.loggers);
+
+		const handle = self.file.handle;
+		if (handle != std.io.getStdErr().handle and handle != std.io.getStdOut().handle) {
+			self.file.close();
+		}
+
 		allocator.destroy(self);
 	}
 
@@ -159,28 +186,21 @@ pub const Pool = struct {
 	}
 
 	fn createLogger(self: *Pool) !Logger {
-		const config = &self.config;
 		const allocator = self.allocator;
 
 		switch (self.config.encoding) {
 			.logfmt => {
-				var buffer = try self.buffer_pool.create();
-				errdefer buffer.deinit();
-
 				const logfmt = try allocator.create(LogFmt);
 				errdefer allocator.destroy(logfmt);
 
-				logfmt.* = try LogFmt.init(allocator, &self.log_mutex, buffer, config);
+				logfmt.* = try LogFmt.init(allocator,self);
 				return .{.pool = self, .inner = .{.logfmt = logfmt}};
 			},
 			.json => {
-				var buffer = try self.buffer_pool.create();
-				errdefer buffer.deinit();
-
 				const json = try allocator.create(Json);
 				errdefer allocator.destroy(json);
 
-				json.* = try Json.init(allocator, &self.log_mutex, buffer, config);
+				json.* = try Json.init(allocator, self);
 				return .{.pool = self, .inner = .{.json = json}};
 			},
 		}
@@ -830,5 +850,54 @@ test "pool: json multiuse with prefix" {
 		try t.expectString("silver=needle  \"@ts\":9999999999999,\"@l\":\"WARN\",\"rid\":\"req1\",\"x\":5}\n", out.items);
 		try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 		logger.release();
+	}
+}
+
+test "pool: file out" {
+	std.fs.cwd().deleteFile("test.out") catch {};
+	defer std.fs.cwd().deleteFile("test.out") catch {};
+
+	{
+		var p = try Pool.init(t.allocator, .{
+			.pool_size = 2,
+			.buffer_size = 100,
+			.output = .{.file = "test.out"},
+		});
+		defer p.deinit();
+
+		p.info().int("over", 9000).log();
+		p.info().string("hello", "world").int("uid", -32).log();
+
+		const data = try std.fs.cwd().readFileAlloc(t.allocator, "test.out", 1000);
+		defer t.allocator.free(data);
+
+		try t.expectString(
+			\\@ts=9999999999999 @l=INFO over=9000
+			\\@ts=9999999999999 @l=INFO hello=world uid=-32
+			\\
+		, data);
+	}
+
+
+	{
+	 // make sure it appends
+		var p = try Pool.init(t.allocator, .{
+			.pool_size = 2,
+			.buffer_size = 100,
+			.output = .{.file = "test.out"},
+		});
+		defer p.deinit();
+
+		p.err().boolean("goodnight", true).log();
+
+		const data = try std.fs.cwd().readFileAlloc(t.allocator, "test.out", 1000);
+		defer t.allocator.free(data);
+
+		try t.expectString(
+			\\@ts=9999999999999 @l=INFO over=9000
+			\\@ts=9999999999999 @l=INFO hello=world uid=-32
+			\\@ts=9999999999999 @l=ERROR goodnight=Y
+			\\
+		, data);
 	}
 }

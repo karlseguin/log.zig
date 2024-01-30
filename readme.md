@@ -1,6 +1,6 @@
 Structured Logging for Zig
 
-logz is an opinionated structured logger that outputs to stdout, stderr or a custom writer using logfmt or JSON. It aims to minimize runtime memory allocation by using a pool of pre-allocated loggers. 
+logz is an opinionated structured logger that outputs to stdout, stderr, a file or a custom writer using logfmt or JSON. It aims to minimize runtime memory allocation by using a pool of pre-allocated loggers. 
 
 # Metrics
 If you're looking for metrics, check out my <a href="https://github.com/karlseguin/metrics.zig">prometheus library for Zig</a>.
@@ -19,6 +19,8 @@ try logz.setup(allocator, .{
     .buffer_size = 4096, 
     .large_buffer_count = 8,
     .large_buffer_size = 16384,
+    .output = .stdout,
+    .encoding = .logfmt,
 });
 
 // other places in your code
@@ -43,10 +45,15 @@ requestLogs.err().
 
 `logz.Level.parse([]const u8) ?Level` can be used to convert a string into a logz.Level.
 
+The configuration `output` can be `.stdout`, `.stderr` or a `.{.file = "PATH TO FILE}`. More advanced cases can use `logTo(writer: anytype)` instead of `log()`.
+
+The configuration `encoding` can be either `logfmt` or `json`.
+
 # Important Notes
 1. Attribute keys are never escaped. logz assumes that attribute keys can be written as is.
 2. Logz can silently drop attributes from a log entry. This only happens when the attribute exceeds the configured sized (either of the buffer or the buffer + large_buffer) or a large buffer couldn't be created.
 3. Depending on the `pool_strategy` configuration, when empty the pool will either dynamically create a logger (`.pool_strategy = .create`) or return a noop logger (`.pool_strategy = .noop)`. If creation fails, a noop logger will be return and an error is written using `std.log.err`.
+
 ## Pools and Loggers
 Pools are thread-safe.
 
@@ -141,7 +148,7 @@ pub const Config = struct {
     prefix: ?[]const u8 = null,
 
     // Where to write the output: can be either .stdout or .stderr
-    output: Output = .stdout,
+    output: Output = .stdout, // or .stderr, or .{.file = "PATH TO FILE"}
 
     encoding: Encoding = .logfmt, // or .json
 

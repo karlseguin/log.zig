@@ -8,6 +8,11 @@ If you're looking for metrics, check out my <a href="https://github.com/karlsegu
 # Installation
 This library supports native Zig module (introduced in 0.11). Add a "logz" dependency to your `build.zig.zon`.
 
+## Zig 0.11
+Please use the [zig-0.11](https://github.com/karlseguin/log.zig/tree/zig-0.11) branch for a version of the library which is compatible with Zig 0.11.
+
+The master branch of this library follows Zig's master.
+
 # Usage
 For simple cases, a global logging pool can be configured and used:
 

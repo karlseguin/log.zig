@@ -345,12 +345,11 @@ The maximum possible log entry is: `config.prefix.len + config.buffer_size + con
 Th last 35 bytes is for the the @ts and @l attributes, and the trailing newline. The exact length of these can vary by a few bytes (e.g. the json encoder takes a few additional bytes to quote the key).
 
 ### Custom Output
-The `logTo(writer: anytype)` can be called instead of `log()`. The writer must expose 2 methods:
+The `logTo(writer: anytype)` can be called instead of `log()`. The writer must expose 1 method:
 
 * `writeAll(self: Self, data: []const u8) !void`
-* `writeByte(self: Self, b: u8) !void`
 
-A single call to `logTo()` can result in multiple calls to `writeAll` / `writeByte`. `logTo` uses a mutex to ensure that a single entry is written to the writer at a time.
+A single call to `logTo()` can result in multiple calls to `writeAll`. `logTo` uses a mutex to ensure that a single entry is written to the writer at a time.
 
 ## Testing
 When testing, I recommend you do the following in your main test entry:

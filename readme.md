@@ -27,6 +27,7 @@ try logz.setup(allocator, .{
     .output = .stdout,
     .encoding = .logfmt,
 });
+defer logz.deinit();
 
 // other places in your code
 logz.info().string("path", req.url.path).int("ms", elapsed).log();

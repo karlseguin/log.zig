@@ -19,7 +19,7 @@ For simple cases, a global logging pool can be configured and used:
 ```zig
 // initialize a logging pool
 try logz.setup(allocator, .{
-    .level = .Warn, 
+    .level = .Info, 
     .pool_size = 100,
     .buffer_size = 4096, 
     .large_buffer_count = 8,

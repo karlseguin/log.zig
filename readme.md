@@ -371,3 +371,23 @@ First, you should not use `std.testing.allocator` since Zig offers no way to cle
 Second, notice that we're using a global allocator. This is because the pool may need to dynamically allocate a logger, and thus the allocator must exist for the lifetime of the pool. Strictly speaking, this can be avoided if you know that the pool will never need to allocate a dynamic logger, so setting a sufficiently large `pool_size` would also work.
 
 Finally, you should set the log level to '.None' until the following Zig  issue is fixed [https://github.com/ziglang/zig/issues/15091](https://github.com/ziglang/zig/issues/15091).
+
+## Metrics
+A few basic metrics are collected using [metrics.zig](https://github.com/karlseguin/metrics.zig), a prometheus-compatible library. These can be written to an `std.io.Writer` using `try logz.writeMetrics(writer)`. As an example using [httpz](https://github.com/karlseguin/http.zig):
+
+```zig
+pub fn metrics(_: *httpz.Request, res: *httpz.Response) !void {
+    const writer = res.writer();
+    try logz.writeMetrics(writer);
+
+    // also write out the httpz metrics
+    try httpz.writeMetrics(writer);
+}
+```
+
+The metrics are:
+
+* `logz_no_space` - counts the number of bytes which resulted in an attribute being dropped from a log. Consider increasing `buffer_size` and/or `large_buffer_size`.
+* `logz_pool_empty` - counts the number of times the log pool was empty. Depending on the `pool_startegy` configuration, this either results in a logger being dynamically allocated, or a log message being dropped. Consider increasing `pool_size`.
+* `logz_large_buffer_empty` - counts the number of times the large buffer pool was empty. Depending on the `large_buffer_startegy` configuration, this either in a large buffer being dynamically allocated, or part of a log being dropped. Consider increasing `large_buffer_count`.
+* `logz_large_buffer_acquire` - counts the number of times a large buffer was successfully retrived from the large buffer pool. This is not particularly problematic, but, as the large buffer pool is a limited and mutex-protected, this can be reduced by increasing `buffer_size`.

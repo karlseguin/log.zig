@@ -6,6 +6,7 @@ const Json = @import("json.zig").Json;
 const LogFmt = @import("logfmt.zig").LogFmt;
 const Config = @import("config.zig").Config;
 const BufferPool = @import("buffer.zig").Pool;
+const metrics = @import("metrics.zig");
 
 const Mutex = std.Thread.Mutex;
 const Allocator = std.mem.Allocator;
@@ -111,6 +112,7 @@ pub const Pool = struct {
 			// dont hold the lock over factory
 			self.pool_mutex.unlock();
 
+			metrics.poolEmpty();
 			if (self.strategy == .noop) {
 				return logz.noop;
 			}

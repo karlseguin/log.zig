@@ -17,6 +17,10 @@ const Allocator = std.mem.Allocator;
 var init = false;
 var global: *Pool = undefined;
 
+pub fn writeMetrics(writer: anytype) !void {
+	return @import("metrics.zig").write(writer);
+}
+
 pub fn setup(allocator: Allocator, config: Config) !void {
 	if (init) {
 		global.deinit();

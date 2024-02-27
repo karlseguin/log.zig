@@ -4,8 +4,14 @@ pub fn build(b: *std.Build) !void {
 	const target = b.standardTargetOptions(.{});
 	const optimize = b.standardOptimizeOption(.{});
 
+	const dep_opts = .{.target = target,.optimize = optimize};
+	const metrics_module = b.dependency("metrics", dep_opts).module("metrics");
+
 	_ = b.addModule("logz", .{
 		.root_source_file = .{ .path = "src/logz.zig" },
+		.imports = &.{
+			.{.name = "metrics", .module = metrics_module}
+		},
 	});
 
 	const lib_test = b.addTest(.{
@@ -14,6 +20,7 @@ pub fn build(b: *std.Build) !void {
 		.optimize = optimize,
 		.test_runner = "test_runner.zig",
 	});
+	lib_test.root_module.addImport("metrics", metrics_module);
 	const run_test = b.addRunArtifact(lib_test);
 	run_test.has_side_effects = true;
 

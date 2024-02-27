@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const metrics = @import("metrics.zig");
 const Config = @import("config.zig").Config;
 
 const Mutex = std.Thread.Mutex;
@@ -78,6 +79,7 @@ pub const Buffer = struct {
 		}
 
 		if (buf.ptr != self.static.ptr) {
+			metrics.noSpace(1);
 			return error.NoSpaceLeft;
 		}
 
@@ -180,6 +182,7 @@ pub const Buffer = struct {
 			return .{.acquire_large = available};
 		}
 
+		metrics.noSpace(n);
 		return .{.none = {}};
 	}
 
@@ -400,6 +403,8 @@ pub const Pool = struct {
 		const available = self.available;
 		if (available == 0) {
 			self.mutex.unlock();
+
+			metrics.largeBufferEmpty();
 			if (self.strategy == .drop) {
 				return null;
 			}
@@ -410,6 +415,7 @@ pub const Pool = struct {
 		const buf = buffers[index];
 		self.available = index;
 		self.mutex.unlock();
+		metrics.largeBufferAcquire();
 		return buf;
 	}
 

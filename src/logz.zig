@@ -17,6 +17,13 @@ const Allocator = std.mem.Allocator;
 var init = false;
 var global: *Pool = undefined;
 
+pub fn setLevel(l: Level) void {
+	if (@import("builtin").is_test == false) {
+		@compileError("logz.setLevel can only be called during testing");
+	}
+	global.level = @intFromEnum(l);
+}
+
 pub fn writeMetrics(writer: anytype) !void {
 	return @import("metrics.zig").write(writer);
 }

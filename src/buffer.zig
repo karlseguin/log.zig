@@ -214,6 +214,26 @@ pub const Buffer = struct {
 		}
 		self.pos = rewind.pos;
 	}
+
+	pub fn writer(self: *Buffer) Writer.IOWriter {
+		return .{.context = Writer.init(self)};
+	}
+
+	pub const Writer = struct {
+		w: *Buffer,
+
+		pub const Error = Allocator.Error;
+		pub const IOWriter = std.io.Writer(Writer, error{OutOfMemory}, Writer.write);
+
+		fn init(w: *Buffer) Writer {
+			return .{.w = w};
+		}
+
+		pub fn write(self: Writer, data: []const u8) Allocator.Error!usize {
+			self.w.writeAll(data) catch return error.OutOfMemory;
+			return data.len;
+		}
+	};
 };
 
 pub const AttributeWriter = struct {

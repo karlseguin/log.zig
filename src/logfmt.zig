@@ -204,7 +204,7 @@ pub const LogFmt = struct {
 
 		const rewind = self.startKeyValue(key) orelse return;
 		var buffer = &self.buffer;
-		std.fmt.formatFloatDecimal(f, .{}, buffer) catch {
+		std.fmt.formatType(f, "d", .{}, buffer.writer(), 0) catch {
 			self.buffer.rollback(rewind);
 			return;
 		};

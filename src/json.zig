@@ -156,7 +156,7 @@ pub const Json = struct {
 	}
 
 	pub fn int(self: *Json, key: []const u8, value: anytype) void {
-		const n = switch (@typeInfo(@TypeOf(value))) {
+		const f = switch (@typeInfo(@TypeOf(value))) {
 			.Optional => blk: {
 				if (value) |v| {
 					break :blk v;
@@ -173,7 +173,7 @@ pub const Json = struct {
 
 		const rewind = self.startKeyValue(key, 0) orelse return;
 		var buffer = &self.buffer;
-		std.fmt.formatInt(n, 10, .lower, .{}, buffer) catch {
+		std.fmt.formatType(f, "d", .{}, buffer.writer(), 0) catch {
 			self.buffer.rollback(rewind);
 			return;
 		};
@@ -198,7 +198,7 @@ pub const Json = struct {
 
 		const rewind = self.startKeyValue(key, 0) orelse return;
 		var buffer = &self.buffer;
-		std.fmt.formatFloatDecimal(f, .{}, buffer) catch {
+		std.fmt.formatType(f, "d", .{}, buffer.writer(), 0) catch {
 			self.buffer.rollback(rewind);
 			return;
 		};

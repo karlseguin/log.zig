@@ -14,7 +14,7 @@ pub var out_mutex = std.Thread.Mutex{};
 
 pub fn getRandom() std.rand.DefaultPrng {
 	var seed: u64 = undefined;
-	std.os.getrandom(std.mem.asBytes(&seed)) catch unreachable;
+	std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
 	return std.rand.DefaultPrng.init(seed);
 }
 

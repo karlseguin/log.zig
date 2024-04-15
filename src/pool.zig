@@ -187,7 +187,7 @@ pub const Pool = struct {
 		return l;
 	}
 
-	fn createLogger(self: *Pool) !Logger {
+	pub fn createLogger(self: *Pool) !Logger {
 		const allocator = self.allocator;
 
 		switch (self.config.encoding) {
@@ -208,7 +208,7 @@ pub const Pool = struct {
 		}
 	}
 
-	fn destroyLogger(self: *Pool, l: Logger) void {
+	pub fn destroyLogger(self: *Pool, l: Logger) void {
 		switch (l.inner) {
 			.logfmt => |logfmt| {
 				logfmt.deinit(self.allocator);

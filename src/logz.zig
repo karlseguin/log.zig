@@ -227,7 +227,14 @@ pub const Logger = struct {
 	pub fn release(self: Logger) void {
 		switch (self.inner) {
 			.noop => {},
-			else => self.pool.release(self),
+			inline else  => self.pool.release(self),
+		}
+	}
+
+	pub fn deinit(self: Logger) void {
+		switch (self.inner) {
+			.noop => {},
+			inline else => self.pool.destroyLogger(self),
 		}
 	}
 
@@ -256,6 +263,10 @@ pub const noop = Logger{.pool = undefined, .inner = .{.noop = {}}};
 
 pub fn level() Level {
 	return @enumFromInt(global.level);
+}
+
+pub fn newLogger() !Logger {
+	return global.createLogger();
 }
 
 pub fn shouldLog(l: Level) bool {

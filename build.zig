@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) !void {
 		.root_source_file = b.path("src/logz.zig"),
 		.target = target,
 		.optimize = optimize,
-		.test_runner = .{.path = "test_runner.zig"},
+		.test_runner = b.path("test_runner.zig"),
 	});
 	lib_test.root_module.addImport("metrics", metrics_module);
 	const run_test = b.addRunArtifact(lib_test);

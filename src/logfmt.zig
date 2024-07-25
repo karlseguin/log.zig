@@ -903,7 +903,7 @@ test "logfmt: src" {
 		// normal strings
 		const src = @src();
 		logfmt.src(src);
-		try expectFmt(&logfmt, "@src.file=src/logfmt.zig @src.fn=\"test.logfmt: src\" @src.line={d}", .{src.line});
+		try expectFmt(&logfmt, "@src.file=logfmt.zig @src.fn=\"test.logfmt: src\" @src.line={d}", .{src.line});
 	}
 }
 

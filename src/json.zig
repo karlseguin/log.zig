@@ -791,7 +791,7 @@ test "json: src" {
 
 	const src = @src();
 	json.src(src);
-	try expectFmt(&json, "\"@src\":{{\"file\":\"src/json.zig\",\"fn\":\"test.json: src\",\"line\":{d}}}", .{src.line});
+	try expectFmt(&json, "\"@src\":{{\"file\":\"json.zig\",\"fn\":\"test.json: src\",\"line\":{d}}}", .{src.line});
 }
 
 test "json: src larger" {
@@ -804,7 +804,7 @@ test "json: src larger" {
 
 	const src = @src();
 	json.src(src);
-	try expectFmt(&json, "\"@src\":{{\"file\":\"src/json.zig\",\"fn\":\"test.json: src larger\",\"line\":{d}}}", .{src.line});
+	try expectFmt(&json, "\"@src\":{{\"file\":\"json.zig\",\"fn\":\"test.json: src larger\",\"line\":{d}}}", .{src.line});
 }
 
 test "json: src doesn't fit" {

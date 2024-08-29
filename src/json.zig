@@ -157,14 +157,14 @@ pub const Json = struct {
 
     pub fn int(self: *Json, key: []const u8, value: anytype) void {
         const f = switch (@typeInfo(@TypeOf(value))) {
-            .Optional => blk: {
+            .optional => blk: {
                 if (value) |v| {
                     break :blk v;
                 }
                 self.writeNull(key);
                 return;
             },
-            .Null => {
+            .@"null" => {
                 self.writeNull(key);
                 return;
             },
@@ -182,14 +182,14 @@ pub const Json = struct {
 
     pub fn float(self: *Json, key: []const u8, value: anytype) void {
         const f = switch (@typeInfo(@TypeOf(value))) {
-            .Optional => blk: {
+            .optional => blk: {
                 if (value) |v| {
                     break :blk v;
                 }
                 self.writeNull(key);
                 return;
             },
-            .Null => {
+            .@"null" => {
                 self.writeNull(key);
                 return;
             },
@@ -207,14 +207,14 @@ pub const Json = struct {
 
     pub fn boolean(self: *Json, key: []const u8, value: anytype) void {
         const b = switch (@typeInfo(@TypeOf(value))) {
-            .Optional => blk: {
+            .optional => blk: {
                 if (value) |v| {
                     break :blk v;
                 }
                 self.writeNull(key);
                 return;
             },
-            .Null => {
+            .@"null" => {
                 self.writeNull(key);
                 return;
             },
@@ -270,7 +270,7 @@ pub const Json = struct {
         const T = @TypeOf(value);
 
         switch (@typeInfo(T)) {
-            .Optional => {
+            .optional => {
                 if (value) |v| {
                     self.string("@err", @errorName(v));
                 } else {
@@ -285,7 +285,7 @@ pub const Json = struct {
         const T = @TypeOf(value);
 
         switch (@typeInfo(T)) {
-            .Optional => {
+            .optional => {
                 if (value) |v| {
                     self.string(key, @errorName(v));
                 } else {
@@ -818,6 +818,18 @@ test "json: src doesn't fit" {
     try expectLog(&json, null);
 }
 
+
+test "json: tabs" {
+    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
+    defer p.deinit();
+
+    var json = try Json.init(t.allocator, p);
+    defer json.deinit(t.allocator);
+
+    json.string("key1", "key_with_tab\t");
+     try expectLog(&json, "\"key1\":\"key_with_tab\\t\"");
+}
+
 test "json: fmt" {
     const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
     defer p.deinit();
@@ -875,3 +887,5 @@ fn expectFmt(json: *Json, comptime fmt: []const u8, args: anytype) !void {
     const expected = try std.fmt.bufPrint(&buf, "{{\"@ts\":9999999999999," ++ fmt ++ "}}\n", args);
     try t.expectString(expected, out.items);
 }
+
+

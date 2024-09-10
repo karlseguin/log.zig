@@ -163,14 +163,14 @@ pub const LogFmt = struct {
 
     pub fn int(self: *LogFmt, key: []const u8, value: anytype) void {
         const n = switch (@typeInfo(@TypeOf(value))) {
-            .optional => blk: {
+            .Optional => blk: {
                 if (value) |v| {
                     break :blk v;
                 }
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .Null => {
                 self.writeNull(key);
                 return;
             },
@@ -188,14 +188,14 @@ pub const LogFmt = struct {
 
     pub fn float(self: *LogFmt, key: []const u8, value: anytype) void {
         const f = switch (@typeInfo(@TypeOf(value))) {
-            .optional => blk: {
+            .Optional => blk: {
                 if (value) |v| {
                     break :blk v;
                 }
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .Null => {
                 self.writeNull(key);
                 return;
             },
@@ -213,14 +213,14 @@ pub const LogFmt = struct {
 
     pub fn boolean(self: *LogFmt, key: []const u8, value: anytype) void {
         const b = switch (@typeInfo(@TypeOf(value))) {
-            .optional => blk: {
+            .Optional => blk: {
                 if (value) |v| {
                     break :blk v;
                 }
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .Null => {
                 self.writeNull(key);
                 return;
             },
@@ -262,7 +262,7 @@ pub const LogFmt = struct {
         const T = @TypeOf(value);
 
         switch (@typeInfo(T)) {
-            .optional => {
+            .Optional => {
                 if (value) |v| {
                     self.string("@err", @errorName(v));
                 } else {
@@ -277,7 +277,7 @@ pub const LogFmt = struct {
         const T = @TypeOf(value);
 
         switch (@typeInfo(T)) {
-            .optional => {
+            .Optional => {
                 if (value) |v| {
                     self.string(key, @errorName(v));
                 } else {
@@ -907,7 +907,7 @@ test "logfmt: src" {
         // normal strings
         const src = @src();
         logfmt.src(src);
-        try expectFmt(&logfmt, "@src.file=logfmt.zig @src.fn=\"test.logfmt: src\" @src.line={d}", .{src.line});
+        try expectFmt(&logfmt, "@src.file=src/logfmt.zig @src.fn=\"test.logfmt: src\" @src.line={d}", .{src.line});
     }
 }
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = std.builtin;
 const logz = @import("logz.zig");
 
 const Pool = @import("pool.zig").Pool;
@@ -157,14 +158,14 @@ pub const Json = struct {
 
     pub fn int(self: *Json, key: []const u8, value: anytype) void {
         const f = switch (@typeInfo(@TypeOf(value))) {
-            .optional => blk: {
+            .Optional => blk: {
                 if (value) |v| {
                     break :blk v;
                 }
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .Null => {
                 self.writeNull(key);
                 return;
             },
@@ -182,14 +183,14 @@ pub const Json = struct {
 
     pub fn float(self: *Json, key: []const u8, value: anytype) void {
         const f = switch (@typeInfo(@TypeOf(value))) {
-            .optional => blk: {
+            .Optional => blk: {
                 if (value) |v| {
                     break :blk v;
                 }
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .Null => {
                 self.writeNull(key);
                 return;
             },
@@ -207,14 +208,14 @@ pub const Json = struct {
 
     pub fn boolean(self: *Json, key: []const u8, value: anytype) void {
         const b = switch (@typeInfo(@TypeOf(value))) {
-            .optional => blk: {
+            .Optional => blk: {
                 if (value) |v| {
                     break :blk v;
                 }
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .Null => {
                 self.writeNull(key);
                 return;
             },
@@ -270,7 +271,7 @@ pub const Json = struct {
         const T = @TypeOf(value);
 
         switch (@typeInfo(T)) {
-            .optional => {
+            .Optional => {
                 if (value) |v| {
                     self.string("@err", @errorName(v));
                 } else {
@@ -285,7 +286,7 @@ pub const Json = struct {
         const T = @TypeOf(value);
 
         switch (@typeInfo(T)) {
-            .optional => {
+            .Optional => {
                 if (value) |v| {
                     self.string(key, @errorName(v));
                 } else {
@@ -790,7 +791,7 @@ test "json: src" {
 
     const src = @src();
     json.src(src);
-    try expectFmt(&json, "\"@src\":{{\"file\":\"json.zig\",\"fn\":\"test.json: src\",\"line\":{d}}}", .{src.line});
+    try expectFmt(&json, "\"@src\":{{\"file\":\"src/json.zig\",\"fn\":\"test.json: src\",\"line\":{d}}}", .{src.line});
 }
 
 test "json: src larger" {
@@ -803,7 +804,7 @@ test "json: src larger" {
 
     const src = @src();
     json.src(src);
-    try expectFmt(&json, "\"@src\":{{\"file\":\"json.zig\",\"fn\":\"test.json: src larger\",\"line\":{d}}}", .{src.line});
+    try expectFmt(&json, "\"@src\":{{\"file\":\"src/json.zig\",\"fn\":\"test.json: src larger\",\"line\":{d}}}", .{src.line});
 }
 
 test "json: src doesn't fit" {
@@ -818,7 +819,6 @@ test "json: src doesn't fit" {
     try expectLog(&json, null);
 }
 
-
 test "json: tabs" {
     const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
     defer p.deinit();
@@ -827,7 +827,7 @@ test "json: tabs" {
     defer json.deinit(t.allocator);
 
     json.string("key1", "key_with_tab\t");
-     try expectLog(&json, "\"key1\":\"key_with_tab\\t\"");
+    try expectLog(&json, "\"key1\":\"key_with_tab\\t\"");
 }
 
 test "json: fmt" {
@@ -887,5 +887,3 @@ fn expectFmt(json: *Json, comptime fmt: []const u8, args: anytype) !void {
     const expected = try std.fmt.bufPrint(&buf, "{{\"@ts\":9999999999999," ++ fmt ++ "}}\n", args);
     try t.expectString(expected, out.items);
 }
-
-

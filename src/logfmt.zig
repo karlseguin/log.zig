@@ -170,7 +170,7 @@ pub const LogFmt = struct {
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .null => {
                 self.writeNull(key);
                 return;
             },
@@ -195,7 +195,7 @@ pub const LogFmt = struct {
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .null => {
                 self.writeNull(key);
                 return;
             },
@@ -220,7 +220,7 @@ pub const LogFmt = struct {
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .null => {
                 self.writeNull(key);
                 return;
             },

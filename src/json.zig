@@ -164,7 +164,7 @@ pub const Json = struct {
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .null => {
                 self.writeNull(key);
                 return;
             },
@@ -189,7 +189,7 @@ pub const Json = struct {
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .null => {
                 self.writeNull(key);
                 return;
             },
@@ -214,7 +214,7 @@ pub const Json = struct {
                 self.writeNull(key);
                 return;
             },
-            .@"null" => {
+            .null => {
                 self.writeNull(key);
                 return;
             },
@@ -818,7 +818,6 @@ test "json: src doesn't fit" {
     try expectLog(&json, null);
 }
 
-
 test "json: tabs" {
     const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
     defer p.deinit();
@@ -827,7 +826,7 @@ test "json: tabs" {
     defer json.deinit(t.allocator);
 
     json.string("key1", "key_with_tab\t");
-     try expectLog(&json, "\"key1\":\"key_with_tab\\t\"");
+    try expectLog(&json, "\"key1\":\"key_with_tab\\t\"");
 }
 
 test "json: fmt" {
@@ -887,5 +886,3 @@ fn expectFmt(json: *Json, comptime fmt: []const u8, args: anytype) !void {
     const expected = try std.fmt.bufPrint(&buf, "{{\"@ts\":9999999999999," ++ fmt ++ "}}\n", args);
     try t.expectString(expected, out.items);
 }
-
-

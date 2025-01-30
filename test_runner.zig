@@ -2,8 +2,8 @@
 // const tests = b.addTest(.{
 //   .target = target,
 //   .optimize = optimize,
-//   .test_runner = "test_runner.zig", // add this line
-//   .root_source_file = .{ .path = "src/main.zig" },
+//   .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple }, // add this line
+//   .root_source_file = b.path("src/main.zig"),
 // });
 
 const std = @import("std");
@@ -17,7 +17,7 @@ const BORDER = "=" ** 80;
 var current_test: ?[]const u8 = null;
 
 pub fn main() !void {
-    var mem: [4096]u8 = undefined;
+    var mem: [8192]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&mem);
 
     const allocator = fba.allocator();
@@ -37,11 +37,23 @@ pub fn main() !void {
     printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
     for (builtin.test_functions) |t| {
-        std.testing.allocator_instance = .{};
+        if (isSetup(t)) {
+            t.func() catch |err| {
+                printer.status(.fail, "\nsetup \"{s}\" failed: {}\n", .{ t.name, err });
+                return err;
+            };
+        }
+    }
+
+    for (builtin.test_functions) |t| {
+        if (isSetup(t) or isTeardown(t)) {
+            continue;
+        }
+
         var status = Status.pass;
         slowest.startTiming();
 
-        const is_unnamed_test = std.mem.endsWith(u8, t.name, ".test_0");
+        const is_unnamed_test = isUnnamed(t);
         if (env.filter) |f| {
             if (!is_unnamed_test and std.mem.indexOf(u8, t.name, f) == null) {
                 continue;
@@ -61,12 +73,9 @@ pub fn main() !void {
         };
 
         current_test = friendly_name;
+        std.testing.allocator_instance = .{};
         const result = t.func();
         current_test = null;
-
-        if (is_unnamed_test) {
-            continue;
-        }
 
         const ns_taken = slowest.endTiming(friendly_name);
 
@@ -96,10 +105,19 @@ pub fn main() !void {
         }
 
         if (env.verbose) {
-            const ms = @as(f64, @floatFromInt(ns_taken)) / 100_000.0;
+            const ms = @as(f64, @floatFromInt(ns_taken)) / 1_000_000.0;
             printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
         } else {
             printer.status(status, ".", .{});
+        }
+    }
+
+    for (builtin.test_functions) |t| {
+        if (isTeardown(t)) {
+            t.func() catch |err| {
+                printer.status(.fail, "\nteardown \"{s}\" failed: {}\n", .{ t.name, err });
+                return err;
+            };
         }
     }
 
@@ -216,7 +234,7 @@ const SlowTracker = struct {
         const count = slowest.count();
         printer.fmt("Slowest {d} test{s}: \n", .{ count, if (count != 1) "s" else "" });
         while (slowest.removeMinOrNull()) |info| {
-            const ms = @as(f64, @floatFromInt(info.ns)) / 100_000.0;
+            const ms = @as(f64, @floatFromInt(info.ns)) / 1_000_000.0;
             printer.fmt("  {d:.2}ms\t{s}\n", .{ ms, info.name });
         }
     }
@@ -264,9 +282,27 @@ const Env = struct {
     }
 };
 
-pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
-    if (current_test) |ct| {
-        std.debug.print("\x1b[31m{s}\npanic running \"{s}\"\n{s}\x1b[0m\n", .{ BORDER, ct, BORDER });
+pub const panic = std.debug.FullPanic(struct {
+    pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
+        if (current_test) |ct| {
+            std.debug.print("\x1b[31m{s}\npanic running \"{s}\"\n{s}\x1b[0m\n", .{ BORDER, ct, BORDER });
+        }
+        std.debug.defaultPanic(msg, first_trace_addr);
     }
-    std.builtin.Panic.call(msg, error_return_trace, ret_addr);
+}.panicFn);
+
+fn isUnnamed(t: std.builtin.TestFn) bool {
+    const marker = ".test_";
+    const test_name = t.name;
+    const index = std.mem.indexOf(u8, test_name, marker) orelse return false;
+    _ = std.fmt.parseInt(u32, test_name[index + marker.len ..], 10) catch return false;
+    return true;
+}
+
+fn isSetup(t: std.builtin.TestFn) bool {
+    return std.mem.endsWith(u8, t.name, "tests:beforeAll");
+}
+
+fn isTeardown(t: std.builtin.TestFn) bool {
+    return std.mem.endsWith(u8, t.name, "tests:afterAll");
 }

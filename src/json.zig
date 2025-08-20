@@ -29,6 +29,8 @@ pub const Json = struct {
 
     mutex: *Mutex,
 
+    interface: std.Io.Writer,
+
     pub fn init(allocator: Allocator, pool: *Pool) !Json {
         var buffer = try pool.buffer_pool.create();
         errdefer buffer.deinit();
@@ -49,12 +51,23 @@ pub const Json = struct {
             .out = pool.file,
             .multiuse_length = null,
             .mutex = &pool.log_mutex,
+            .interface = .{
+                .buffer = &.{},
+                .vtable = &.{ .drain = Json.drain },
+            },
         };
     }
 
     pub fn deinit(self: *Json, allocator: Allocator) void {
         allocator.free(self.meta);
         self.buffer.deinit();
+    }
+
+    fn drain(io_w: *std.Io.Writer, data: []const []const u8, splat: usize) !usize {
+        _ = splat;
+        const self: *@This() = @fieldParentPtr("interface", io_w);
+        self.buffer.writeAll(data[0]) catch return error.WriteFailed;
+        return data[0].len;
     }
 
     pub fn multiuse(self: *Json) void {
@@ -91,12 +104,12 @@ pub const Json = struct {
         };
 
         const rewind = self.startKeyValue(key, value.len) orelse return;
-        var buffer = &self.buffer;
-        std.json.encodeJsonString(value, .{}, buffer) catch {
-            buffer.rollback(rewind);
+
+        std.json.Stringify.encodeJsonString(value, .{}, &self.interface) catch {
+            self.buffer.rollback(rewind);
             return;
         };
-        buffer.writeByte(',') catch buffer.rollback(rewind);
+        self.buffer.writeByte(',') catch self.buffer.rollback(rewind);
     }
 
     pub fn fmt(self: *Json, key: []const u8, comptime format: []const u8, values: anytype) void {
@@ -109,7 +122,8 @@ pub const Json = struct {
             return;
         };
 
-        std.fmt.format(FmtWriter{ .buffer = &self.buffer }, format, values) catch {
+        var writter = FmtWriter.init(self);
+        writter.interface.print(format, values) catch {
             buffer.rollback(rewind);
             return;
         };
@@ -172,12 +186,11 @@ pub const Json = struct {
         };
 
         const rewind = self.startKeyValue(key, 0) orelse return;
-        var buffer = &self.buffer;
-        std.fmt.formatType(f, "d", .{}, buffer.writer(), 0) catch {
+        self.interface.print("{d}", .{f}) catch {
             self.buffer.rollback(rewind);
             return;
         };
-        buffer.writeByte(',') catch self.buffer.rollback(rewind);
+        self.buffer.writeByte(',') catch self.buffer.rollback(rewind);
     }
 
     pub fn float(self: *Json, key: []const u8, value: anytype) void {
@@ -197,12 +210,11 @@ pub const Json = struct {
         };
 
         const rewind = self.startKeyValue(key, 0) orelse return;
-        var buffer = &self.buffer;
-        std.fmt.formatType(f, "d", .{}, buffer.writer(), 0) catch {
+        self.interface.print("{d}", .{f}) catch {
             self.buffer.rollback(rewind);
             return;
         };
-        buffer.writeByte(',') catch self.buffer.rollback(rewind);
+        self.buffer.writeByte(',') catch self.buffer.rollback(rewind);
     }
 
     pub fn boolean(self: *Json, key: []const u8, value: anytype) void {
@@ -328,7 +340,7 @@ pub const Json = struct {
                 // whitespce in json is ignored, and putting it in keeps all our offsets the same
                 @memcpy(meta_buf[0..7], " \"@ts\":");
             }
-            _ = std.fmt.formatIntBuf(meta_buf[7..], timestamp(), 10, .lower, .{});
+            _ = std.fmt.printInt(meta_buf[7..], timestamp(), 10, .lower, .{});
 
             switch (self.lvl) {
                 .Debug => {
@@ -432,7 +444,7 @@ pub const Json = struct {
     fn writeObject(self: *Json, key: []const u8, value: anytype) void {
         const rewind = self.startKeyValue(key, 2) orelse return;
         var buffer = &self.buffer;
-        std.json.stringify(value, .{}, Writer{ .buffer = buffer }) catch {
+        std.json.Stringify.value(value, .{}, &self.interface) catch {
             buffer.rollback(rewind);
             return;
         };
@@ -440,46 +452,24 @@ pub const Json = struct {
     }
 
     pub const FmtWriter = struct {
-        buffer: *Buffer,
+        json: *Json,
+        interface: std.Io.Writer,
 
-        pub const Error = anyerror;
-
-        pub fn writeAll(self: FmtWriter, data: []const u8) !void {
-            return std.json.encodeJsonStringChars(data, .{}, self.buffer);
+        fn init(json: *Json) FmtWriter {
+            return .{
+                .json = json,
+                .interface = .{
+                    .buffer = &.{},
+                    .vtable = &.{ .drain = FmtWriter.drain },
+                },
+            };
         }
 
-        pub fn writeByteNTimes(self: FmtWriter, b: u8, n: usize) !void {
-            return self.buffer.writeByteNTimes(b, n);
-        }
-
-        pub fn writeBytesNTimes(self: FmtWriter, data: []const u8, n: usize) !void {
-            return self.buffer.writeBytesNTimes(data, n);
-        }
-    };
-
-    pub const Writer = struct {
-        buffer: *Buffer,
-
-        pub const Error = anyerror;
-
-        pub fn writeByte(self: Writer, b: u8) !void {
-            return self.buffer.writeByte(b);
-        }
-
-        pub fn writeByteNTimes(self: Writer, b: u8, n: usize) !void {
-            return self.buffer.writeByteNTimes(b, n);
-        }
-
-        pub fn writeBytesNTimes(self: Writer, data: []const u8, n: usize) !void {
-            return self.buffer.writeBytesNTimes(data, n);
-        }
-
-        pub fn writeAll(self: Writer, value: []const u8) !void {
-            return self.buffer.writeAll(value);
-        }
-
-        pub fn print(self: Writer, comptime format: []const u8, args: anytype) !void {
-            return std.fmt.format(self, format, args);
+        fn drain(io_w: *std.Io.Writer, data: []const []const u8, splat: usize) !usize {
+            _ = splat;
+            const self: *@This() = @fieldParentPtr("interface", io_w);
+            std.json.Stringify.encodeJsonStringChars(data[0], .{}, &self.json.interface) catch return error.WriteFailed;
+            return data[0].len;
         }
     };
 };
@@ -861,11 +851,11 @@ test "json: fmt" {
 fn expectLog(json: *Json, comptime expected: ?[]const u8) !void {
     defer json.reset();
 
-    var out = std.ArrayList(u8).init(t.allocator);
-    try out.ensureTotalCapacity(100);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    try out.ensureTotalCapacity(t.allocator, 100);
+    defer out.deinit(t.allocator);
 
-    try json.logTo(out.writer());
+    try json.logTo(out.writer(t.allocator));
     if (expected) |e| {
         try t.expectString("{\"@ts\":9999999999999," ++ e ++ "}\n", out.items);
     } else {
@@ -876,11 +866,11 @@ fn expectLog(json: *Json, comptime expected: ?[]const u8) !void {
 fn expectFmt(json: *Json, comptime fmt: []const u8, args: anytype) !void {
     defer json.reset();
 
-    var out = std.ArrayList(u8).init(t.allocator);
-    try out.ensureTotalCapacity(100);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    try out.ensureTotalCapacity(t.allocator, 100);
+    defer out.deinit(t.allocator);
 
-    try json.logTo(out.writer());
+    try json.logTo(out.writer(t.allocator));
 
     var buf: [200]u8 = undefined;
     const expected = try std.fmt.bufPrint(&buf, "{{\"@ts\":9999999999999," ++ fmt ++ "}}\n", args);

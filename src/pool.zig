@@ -42,8 +42,8 @@ pub const Pool = struct {
         errdefer allocator.destroy(pool);
 
         const file = switch (config.output) {
-            .stderr => std.io.getStdErr(),
-            .stdout => std.io.getStdOut(),
+            .stderr => std.fs.File.stderr(),
+            .stdout => std.fs.File.stdout(),
             .file => |path| blk: {
                 // createFile with truncate=false still truncates the file
                 // https://github.com/ziglang/zig/issues/14375
@@ -96,7 +96,7 @@ pub const Pool = struct {
         allocator.free(self.loggers);
 
         const handle = self.file.handle;
-        if (handle != std.io.getStdErr().handle and handle != std.io.getStdOut().handle) {
+        if (handle != std.fs.File.stderr().handle and handle != std.fs.File.stdout().handle) {
             self.file.close();
         }
 
@@ -353,14 +353,14 @@ test "pool: empty noop" {
 
 test "pool: logger" {
     var min_config = Config{ .pool_size = 1, .buffer_size = 100 };
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     {
         var p = try Pool.init(t.allocator, min_config);
         defer p.deinit();
 
-        try p.logger().string("hero", "teg").logTo(out.writer());
+        try p.logger().string("hero", "teg").logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 hero=teg\n", out.items);
     }
 
@@ -370,7 +370,7 @@ test "pool: logger" {
         defer p.deinit();
 
         var l = p.logger().string("hero", "teg");
-        try l.logTo(out.writer());
+        try l.logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 hero=teg\n", out.items);
     }
 
@@ -383,7 +383,7 @@ test "pool: logger" {
 
         var l = p.logger().string("hero", "teg");
         _ = l.level(logz.Level.Warn);
-        try l.logTo(out.writer());
+        try l.logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=WARN hero=teg\n", out.items);
     }
 
@@ -396,21 +396,21 @@ test "pool: logger" {
 
         var l = p.logger().string("hero", "teg");
         l.level(logz.Level.Info).done();
-        try l.logTo(out.writer());
+        try l.logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
     }
 }
 
 test "pool: loggerL" {
     const min_config = Config{ .pool_size = 1, .buffer_size = 100 };
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     {
         var p = try Pool.init(t.allocator, min_config);
         defer p.deinit();
 
-        try p.loggerL(.Warn).string("hero", "teg").logTo(out.writer());
+        try p.loggerL(.Warn).string("hero", "teg").logTo(out.writer(t.allocator));
 
         try t.expectString("@ts=9999999999999 @l=WARN hero=teg\n", out.items);
     }
@@ -422,38 +422,38 @@ test "pool: loggerL" {
 
         var logger = p.loggerL(.Warn).string("hero", "teg");
         logger.level(.Error).done();
-        try logger.logTo(out.writer());
+        try logger.logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=ERROR hero=teg\n", out.items);
     }
 }
 
 test "pool: logfmt log" {
     var min_config = Config{ .pool_size = 1, .buffer_size = 100 };
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     {
         min_config.level = .Debug;
         var p = try Pool.init(t.allocator, min_config);
         defer p.deinit();
 
-        try p.debug().int("a", 1).logTo(out.writer());
+        try p.debug().int("a", 1).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=DEBUG a=1\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.info().int("a", 2).logTo(out.writer());
+        try p.info().int("a", 2).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=INFO a=2\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.warn().int("a", 333).logTo(out.writer());
+        try p.warn().int("a", 333).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=WARN a=333\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.err().int("a", 4444).logTo(out.writer());
+        try p.err().int("a", 4444).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=ERROR a=4444\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.fatal().string("aaa", "zzzz").logTo(out.writer());
+        try p.fatal().string("aaa", "zzzz").logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
     }
 
@@ -463,23 +463,23 @@ test "pool: logfmt log" {
         defer p.deinit();
 
         out.clearRetainingCapacity();
-        try p.debug().int("a", 1).logTo(out.writer());
+        try p.debug().int("a", 1).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.info().int("a", 2).logTo(out.writer());
+        try p.info().int("a", 2).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=INFO a=2\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.warn().int("a", 333).logTo(out.writer());
+        try p.warn().int("a", 333).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=WARN a=333\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.err().int("a", 4444).logTo(out.writer());
+        try p.err().int("a", 4444).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=ERROR a=4444\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.fatal().string("aaa", "zzzz").logTo(out.writer());
+        try p.fatal().string("aaa", "zzzz").logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
     }
 
@@ -489,23 +489,23 @@ test "pool: logfmt log" {
         defer p.deinit();
 
         out.clearRetainingCapacity();
-        try p.debug().int("a", 1).logTo(out.writer());
+        try p.debug().int("a", 1).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.info().int("a", 2).logTo(out.writer());
+        try p.info().int("a", 2).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.warn().int("a", 333).logTo(out.writer());
+        try p.warn().int("a", 333).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=WARN a=333\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.err().int("a", 4444).logTo(out.writer());
+        try p.err().int("a", 4444).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=ERROR a=4444\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.fatal().string("aaa", "zzzz").logTo(out.writer());
+        try p.fatal().string("aaa", "zzzz").logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
     }
 
@@ -515,23 +515,23 @@ test "pool: logfmt log" {
         defer p.deinit();
 
         out.clearRetainingCapacity();
-        try p.debug().int("a", 1).logTo(out.writer());
+        try p.debug().int("a", 1).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.info().int("a", 2).logTo(out.writer());
+        try p.info().int("a", 2).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.warn().int("a", 333).logTo(out.writer());
+        try p.warn().int("a", 333).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.err().int("a", 4444).logTo(out.writer());
+        try p.err().int("a", 4444).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=ERROR a=4444\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.fatal().string("aaa", "zzzz").logTo(out.writer());
+        try p.fatal().string("aaa", "zzzz").logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
     }
 
@@ -541,27 +541,27 @@ test "pool: logfmt log" {
         defer p.deinit();
 
         out.clearRetainingCapacity();
-        try p.debug().int("a", 1).logTo(out.writer());
+        try p.debug().int("a", 1).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.info().int("a", 2).logTo(out.writer());
+        try p.info().int("a", 2).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.warn().int("a", 333).logTo(out.writer());
+        try p.warn().int("a", 333).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.err().int("a", 4444).logTo(out.writer());
+        try p.err().int("a", 4444).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.fatal().string("aaa", "zzzz").logTo(out.writer());
+        try p.fatal().string("aaa", "zzzz").logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=FATAL aaa=zzzz\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.logger().string("aaa", "zz2zz").logTo(out.writer());
+        try p.logger().string("aaa", "zz2zz").logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 aaa=zz2zz\n", out.items);
     }
 
@@ -571,30 +571,30 @@ test "pool: logfmt log" {
         defer p.deinit();
 
         out.clearRetainingCapacity();
-        try p.debug().int("a", 1).logTo(out.writer());
+        try p.debug().int("a", 1).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.info().int("a", 2).logTo(out.writer());
+        try p.info().int("a", 2).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.warn().int("a", 333).logTo(out.writer());
+        try p.warn().int("a", 333).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.err().int("a", 4444).logTo(out.writer());
+        try p.err().int("a", 4444).logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
 
         out.clearRetainingCapacity();
-        try p.fatal().string("aaa", "zzzz").logTo(out.writer());
+        try p.fatal().string("aaa", "zzzz").logTo(out.writer(t.allocator));
         try t.expectString("", out.items);
     }
 }
 
 test "pool: logfmt prefix" {
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     var p = try Pool.init(t.allocator, .{ .pool_size = 2, .buffer_size = 100, .prefix = "Keemun " });
     defer p.deinit();
@@ -604,30 +604,30 @@ test "pool: logfmt prefix" {
     var l2 = p.info().int("id", 2);
     var l3 = p.info().int("id", 3);
 
-    try l1.logTo(out.writer());
+    try l1.logTo(out.writer(t.allocator));
     try t.expectString("Keemun @ts=9999999999999 @l=INFO id=1\n", out.items);
 
     out.clearRetainingCapacity();
-    try l2.logTo(out.writer());
+    try l2.logTo(out.writer(t.allocator));
     try t.expectString("Keemun @ts=9999999999999 @l=INFO id=2\n", out.items);
 
     out.clearRetainingCapacity();
-    try l3.logTo(out.writer());
+    try l3.logTo(out.writer(t.allocator));
     try t.expectString("Keemun @ts=9999999999999 @l=INFO id=3\n", out.items);
 
     // and the prefix remains after being released and re-acquired
     out.clearRetainingCapacity();
-    try p.info().int("id", 4).logTo(out.writer());
+    try p.info().int("id", 4).logTo(out.writer(t.allocator));
     try t.expectString("Keemun @ts=9999999999999 @l=INFO id=4\n", out.items);
 
     out.clearRetainingCapacity();
-    try p.info().int("id", 5).logTo(out.writer());
+    try p.info().int("id", 5).logTo(out.writer(t.allocator));
     try t.expectString("Keemun @ts=9999999999999 @l=INFO id=5\n", out.items);
 }
 
 test "pool: logfmt multiuse" {
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     var p = try Pool.init(t.allocator, .{ .pool_size = 2, .buffer_size = 100 });
     defer p.deinit();
@@ -635,14 +635,14 @@ test "pool: logfmt multiuse" {
     {
         // no extra data (why?)
         var logger = p.loggerL(.Info).multiuse();
-        try logger.int("x", 4).logTo(out.writer());
+        try logger.int("x", 4).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=INFO x=4\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 
         out.clearRetainingCapacity();
         _ = logger.int("x", 5);
         logger.level(.Warn).done();
-        try logger.logTo(out.writer());
+        try logger.logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=WARN x=5\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
         logger.release();
@@ -651,14 +651,14 @@ test "pool: logfmt multiuse" {
     {
         out.clearRetainingCapacity();
         var logger = p.loggerL(.Info).stringSafe("rid", "req1").multiuse();
-        try logger.int("x", 4).logTo(out.writer());
+        try logger.int("x", 4).logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=INFO rid=req1 x=4\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 
         out.clearRetainingCapacity();
         _ = logger.int("x", 5);
         logger.level(.Warn).done();
-        try logger.logTo(out.writer());
+        try logger.logTo(out.writer(t.allocator));
         try t.expectString("@ts=9999999999999 @l=WARN rid=req1 x=5\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
         logger.release();
@@ -666,8 +666,8 @@ test "pool: logfmt multiuse" {
 }
 
 test "pool: logfmt multiuse with prefix" {
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     var p = try Pool.init(t.allocator, .{ .pool_size = 2, .buffer_size = 100, .prefix = "silver=needle " });
     defer p.deinit();
@@ -675,14 +675,14 @@ test "pool: logfmt multiuse with prefix" {
     {
         // no extra data (why?)
         var logger = p.loggerL(.Info).multiuse();
-        try logger.int("x", 4).logTo(out.writer());
+        try logger.int("x", 4).logTo(out.writer(t.allocator));
         try t.expectString("silver=needle @ts=9999999999999 @l=INFO x=4\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 
         out.clearRetainingCapacity();
         _ = logger.int("x", 5);
         _ = logger.level(.Warn);
-        try logger.logTo(out.writer());
+        try logger.logTo(out.writer(t.allocator));
         try t.expectString("silver=needle @ts=9999999999999 @l=WARN x=5\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
         logger.release();
@@ -691,14 +691,14 @@ test "pool: logfmt multiuse with prefix" {
     {
         out.clearRetainingCapacity();
         var logger = p.loggerL(.Info).stringSafe("rid", "req1").multiuse();
-        try logger.int("x", 4).logTo(out.writer());
+        try logger.int("x", 4).logTo(out.writer(t.allocator));
         try t.expectString("silver=needle @ts=9999999999999 @l=INFO rid=req1 x=4\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 
         out.clearRetainingCapacity();
         _ = logger.int("x", 5);
         logger.level(.Warn).done();
-        try logger.logTo(out.writer());
+        try logger.logTo(out.writer(t.allocator));
         try t.expectString("silver=needle @ts=9999999999999 @l=WARN rid=req1 x=5\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
         logger.release();
@@ -707,42 +707,42 @@ test "pool: logfmt multiuse with prefix" {
 
 test "pool: json log" {
     var min_config = Config{ .pool_size = 1, .buffer_size = 100, .encoding = .json };
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     {
         min_config.level = .Debug;
         var p = try Pool.init(t.allocator, min_config);
         defer p.deinit();
 
-        try p.debug().int("a", 1).logTo(out.writer());
+        try p.debug().int("a", 1).logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"@l\":\"DEBUG\",\"a\":1}\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.info().int("a", 2).logTo(out.writer());
+        try p.info().int("a", 2).logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"@l\":\"INFO\",\"a\":2}\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.warn().int("a", 333).logTo(out.writer());
+        try p.warn().int("a", 333).logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"@l\":\"WARN\",\"a\":333}\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.err().int("a", 4444).logTo(out.writer());
+        try p.err().int("a", 4444).logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"@l\":\"ERROR\",\"a\":4444}\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.fatal().string("aaa", "zzzz").logTo(out.writer());
+        try p.fatal().string("aaa", "zzzz").logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"@l\":\"FATAL\",\"aaa\":\"zzzz\"}\n", out.items);
 
         out.clearRetainingCapacity();
-        try p.logger().string("aaa", "zzzz").logTo(out.writer());
+        try p.logger().string("aaa", "zzzz").logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"aaa\":\"zzzz\"}\n", out.items);
     }
 }
 
 test "pool: json prefix" {
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     var p = try Pool.init(t.allocator, .{ .pool_size = 2, .buffer_size = 100, .encoding = .json, .prefix = "{\"x\": 1," });
     defer p.deinit();
@@ -752,30 +752,30 @@ test "pool: json prefix" {
     var l2 = p.info().int("id", 2);
     var l3 = p.info().int("id", 3);
 
-    try l1.logTo(out.writer());
+    try l1.logTo(out.writer(t.allocator));
     try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":1}\n", out.items);
 
     out.clearRetainingCapacity();
-    try l2.logTo(out.writer());
+    try l2.logTo(out.writer(t.allocator));
     try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":2}\n", out.items);
 
     out.clearRetainingCapacity();
-    try l3.logTo(out.writer());
+    try l3.logTo(out.writer(t.allocator));
     try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":3}\n", out.items);
 
     // and the prefix remains after being released and re-acquired
     out.clearRetainingCapacity();
-    try p.info().int("id", 4).logTo(out.writer());
+    try p.info().int("id", 4).logTo(out.writer(t.allocator));
     try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":4}\n", out.items);
 
     out.clearRetainingCapacity();
-    try p.info().int("id", 5).logTo(out.writer());
+    try p.info().int("id", 5).logTo(out.writer(t.allocator));
     try t.expectString("{\"x\": 1, \"@ts\":9999999999999,\"@l\":\"INFO\",\"id\":5}\n", out.items);
 }
 
 test "pool: json multiuse" {
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     var p = try Pool.init(t.allocator, .{ .pool_size = 2, .encoding = .json, .buffer_size = 100 });
     defer p.deinit();
@@ -783,14 +783,14 @@ test "pool: json multiuse" {
     {
         // no extra data (why?)
         var logger = p.loggerL(.Info).multiuse();
-        try logger.int("x", 4).logTo(out.writer());
+        try logger.int("x", 4).logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"@l\":\"INFO\",\"x\":4}\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 
         out.clearRetainingCapacity();
         _ = logger.int("x", 5);
         logger.level(.Warn).done();
-        try logger.logTo(out.writer());
+        try logger.logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"@l\":\"WARN\",\"x\":5}\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
         logger.release();
@@ -799,14 +799,14 @@ test "pool: json multiuse" {
     {
         out.clearRetainingCapacity();
         var logger = p.loggerL(.Info).stringSafe("rid", "req1").multiuse();
-        try logger.int("x", 4).logTo(out.writer());
+        try logger.int("x", 4).logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"@l\":\"INFO\",\"rid\":\"req1\",\"x\":4}\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 
         out.clearRetainingCapacity();
         _ = logger.int("x", 5);
         logger.level(.Warn).done();
-        try logger.logTo(out.writer());
+        try logger.logTo(out.writer(t.allocator));
         try t.expectString("{\"@ts\":9999999999999,\"@l\":\"WARN\",\"rid\":\"req1\",\"x\":5}\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
         logger.release();
@@ -814,8 +814,8 @@ test "pool: json multiuse" {
 }
 
 test "pool: json multiuse with prefix" {
-    var out = std.ArrayList(u8).init(t.allocator);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(t.allocator);
 
     var p = try Pool.init(t.allocator, .{ .pool_size = 2, .buffer_size = 100, .encoding = .json, .prefix = "silver=needle " });
     defer p.deinit();
@@ -825,14 +825,14 @@ test "pool: json multiuse with prefix" {
     {
         // no extra data (why?)
         var logger = p.loggerL(.Info).multiuse();
-        try logger.int("x", 4).logTo(out.writer());
+        try logger.int("x", 4).logTo(out.writer(t.allocator));
         try t.expectString("silver=needle  \"@ts\":9999999999999,\"@l\":\"INFO\",\"x\":4}\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 
         out.clearRetainingCapacity();
         _ = logger.int("x", 5);
         _ = logger.level(.Warn);
-        try logger.logTo(out.writer());
+        try logger.logTo(out.writer(t.allocator));
         try t.expectString("silver=needle  \"@ts\":9999999999999,\"@l\":\"WARN\",\"x\":5}\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
         logger.release();
@@ -841,14 +841,14 @@ test "pool: json multiuse with prefix" {
     {
         out.clearRetainingCapacity();
         var logger = p.loggerL(.Info).stringSafe("rid", "req1").multiuse();
-        try logger.int("x", 4).logTo(out.writer());
+        try logger.int("x", 4).logTo(out.writer(t.allocator));
         try t.expectString("silver=needle  \"@ts\":9999999999999,\"@l\":\"INFO\",\"rid\":\"req1\",\"x\":4}\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
 
         out.clearRetainingCapacity();
         _ = logger.int("x", 5);
         logger.level(.Warn).done();
-        try logger.logTo(out.writer());
+        try logger.logTo(out.writer(t.allocator));
         try t.expectString("silver=needle  \"@ts\":9999999999999,\"@l\":\"WARN\",\"rid\":\"req1\",\"x\":5}\n", out.items);
         try t.expectEqual(@as(usize, 1), p.available); // logger hasn't gone back in the pool
         logger.release();

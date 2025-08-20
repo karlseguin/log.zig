@@ -546,7 +546,7 @@ fn testPool(p: *Pool) void {
         std.debug.assert(buf[0] == 0);
 
         buf[0] = 255;
-        std.time.sleep(random.uintAtMost(u32, 100000));
+        std.Thread.sleep(random.uintAtMost(u32, 100000));
         buf[0] = 0;
         p.releaseLarge(buf);
     }

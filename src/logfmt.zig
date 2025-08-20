@@ -29,6 +29,8 @@ pub const LogFmt = struct {
 
     mutex: *Mutex,
 
+    interface: std.Io.Writer,
+
     pub fn init(allocator: Allocator, pool: *Pool) !LogFmt {
         var buffer = try pool.buffer_pool.create();
         errdefer buffer.deinit();
@@ -49,12 +51,23 @@ pub const LogFmt = struct {
             .out = pool.file,
             .multiuse_length = null,
             .mutex = &pool.log_mutex,
+            .interface = .{
+                .buffer = &.{},
+                .vtable = &.{ .drain = LogFmt.drain },
+            },
         };
     }
 
     pub fn deinit(self: *LogFmt, allocator: Allocator) void {
         allocator.free(self.meta);
         self.buffer.deinit();
+    }
+
+    fn drain(io_w: *std.Io.Writer, data: []const []const u8, splat: usize) !usize {
+        _ = splat;
+        const self: *@This() = @fieldParentPtr("interface", io_w);
+        self.buffer.writeAll(data[0]) catch return error.WriteFailed;
+        return data[0].len;
     }
 
     pub fn multiuse(self: *LogFmt) void {
@@ -124,7 +137,8 @@ pub const LogFmt = struct {
             return;
         };
 
-        std.fmt.format(FmtWriter{ .logfmt = self }, format, values) catch {
+        var writer = FmtWriter.init(self);
+        writer.interface.print(format, values) catch {
             buffer.rollback(rewind);
             return;
         };
@@ -178,12 +192,11 @@ pub const LogFmt = struct {
         };
 
         const rewind = self.startKeyValue(key) orelse return;
-        var buffer = &self.buffer;
-        std.fmt.formatInt(n, 10, .lower, .{}, buffer) catch {
+        self.interface.printInt(n, 10, .lower, .{}) catch {
             self.buffer.rollback(rewind);
             return;
         };
-        buffer.writeByte(' ') catch self.buffer.rollback(rewind);
+        self.buffer.writeByte(' ') catch self.buffer.rollback(rewind);
     }
 
     pub fn float(self: *LogFmt, key: []const u8, value: anytype) void {
@@ -204,7 +217,7 @@ pub const LogFmt = struct {
 
         const rewind = self.startKeyValue(key) orelse return;
         var buffer = &self.buffer;
-        std.fmt.formatType(f, "d", .{}, buffer.writer(), 0) catch {
+        self.interface.print("{d}", .{f}) catch {
             self.buffer.rollback(rewind);
             return;
         };
@@ -315,7 +328,7 @@ pub const LogFmt = struct {
             const meta_buf = meta[prefix_len..];
 
             @memcpy(meta_buf[0..4], "@ts=");
-            _ = std.fmt.formatIntBuf(meta_buf[4..], timestamp(), 10, .lower, .{});
+            _ = std.fmt.printInt(meta_buf[4..], timestamp(), 10, .lower, .{});
 
             switch (self.lvl) {
                 .Debug => {
@@ -507,8 +520,24 @@ pub const LogFmt = struct {
 
     pub const FmtWriter = struct {
         logfmt: *LogFmt,
+        interface: std.Io.Writer,
 
-        pub const Error = anyerror;
+        fn init(logfmt: *LogFmt) FmtWriter {
+            return .{
+                .logfmt = logfmt,
+                .interface = .{
+                    .buffer = &.{},
+                    .vtable = &.{ .drain = FmtWriter.drain },
+                },
+            };
+        }
+
+        fn drain(io_w: *std.Io.Writer, data: []const []const u8, splat: usize) !usize {
+            _ = splat;
+            const self: *@This() = @fieldParentPtr("interface", io_w);
+            self.writeAll(data[0]) catch return error.WriteFailed;
+            return data[0].len;
+        }
 
         pub fn writeAll(self: FmtWriter, data: []const u8) !void {
             const ea = escapeAnalysis(data);
@@ -517,14 +546,6 @@ pub const LogFmt = struct {
             } else {
                 return self.logfmt.writeEscapeValue(data, ea.count);
             }
-        }
-
-        pub fn writeByteNTimes(self: FmtWriter, b: u8, n: usize) !void {
-            return self.logfmt.buffer.writeByteNTimes(b, n);
-        }
-
-        pub fn writeBytesNTimes(self: FmtWriter, data: []const u8, n: usize) !void {
-            return self.logfmt.buffer.writeBytesNTimes(data, n);
         }
     };
 };
@@ -943,11 +964,11 @@ test "logfmt: fmt" {
 fn expectLog(lf: *LogFmt, comptime expected: ?[]const u8) !void {
     defer lf.reset();
 
-    var out = std.ArrayList(u8).init(t.allocator);
-    try out.ensureTotalCapacity(100);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    try out.ensureTotalCapacity(t.allocator, 100);
+    defer out.deinit(t.allocator);
 
-    try lf.logTo(out.writer());
+    try lf.logTo(out.writer(t.allocator));
     if (expected) |e| {
         try t.expectString("@ts=9999999999999 " ++ e ++ "\n", out.items);
     } else {
@@ -958,11 +979,11 @@ fn expectLog(lf: *LogFmt, comptime expected: ?[]const u8) !void {
 fn expectFmt(lf: *LogFmt, comptime fmt: []const u8, args: anytype) !void {
     defer lf.reset();
 
-    var out = std.ArrayList(u8).init(t.allocator);
-    try out.ensureTotalCapacity(100);
-    defer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    try out.ensureTotalCapacity(t.allocator, 100);
+    defer out.deinit(t.allocator);
 
-    try lf.logTo(out.writer());
+    try lf.logTo(out.writer(t.allocator));
 
     var buf: [200]u8 = undefined;
     const expected = try std.fmt.bufPrint(&buf, "@ts=9999999999999 " ++ fmt ++ "\n", args);

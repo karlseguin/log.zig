@@ -146,6 +146,22 @@ pub const Logger = struct {
         return self;
     }
 
+    pub fn any(self: Logger, key: []const u8, val: anytype) Logger {
+        switch (self.inner) {
+            .noop => {},
+            inline else => |l| l.any(key, val),
+        }
+        return self;
+    }
+
+    pub fn slice(self: Logger, key: []const u8, values: anytype) Logger {
+        switch (self.inner) {
+            .noop => {},
+            inline else => |l| l.slice(key, values),
+        }
+        return self;
+    }
+
     pub fn int(self: Logger, key: []const u8, value: anytype) Logger {
         switch (self.inner) {
             .noop => {},

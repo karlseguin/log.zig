@@ -271,6 +271,86 @@ pub const LogFmt = struct {
         aw.done();
     }
 
+    pub fn any(self: *LogFmt, key: []const u8, val: anytype) void {
+        const T = @TypeOf(val);
+
+        switch (@typeInfo(T)) {
+            .optional => {
+                if (val) |v| {
+                    return self.any(key, v);
+                }
+                return self.writeNull(key);
+            },
+            .null => return self.writeNull(key),
+            .int, .comptime_int => return self.int(key, val),
+            .float, .comptime_float => return self.float(key, val),
+            .bool => return self.boolean(key, val),
+            .pointer => |ptr| switch (ptr.size) {
+                .slice, .many => switch (ptr.child) {
+                    u8 => return self.string(key, val),
+                    else => {},
+                },
+                .one => switch (@typeInfo(ptr.child)) {
+                    .array => |arr| if (arr.child == u8) {
+                        return self.string(key, val);
+                    },
+                    else => {
+                        if (std.meta.hasMethod(T, "format")) {
+                            const rewind = self.startKeyValue(key) orelse return;
+                            var fmt_writer = FmtWriter.init(self);
+                            val.format(&fmt_writer.interface) catch {
+                                self.buffer.rollback(rewind);
+                                return;
+                            };
+                            self.buffer.writeByte(' ') catch self.buffer.rollback(rewind);
+                            return;
+                        }
+                    },
+                },
+                else => {},
+            },
+            .array => |arr| if (arr.child == u8) {
+                return self.string(key, &val);
+            },
+            .@"enum" => return self.string(key, @tagName(val)),
+            .error_set => return self.errK(key, val),
+            .@"struct" => return self.any(key, &val),
+            .@"union" => {},
+            else => {},
+        }
+        @compileLog(@typeInfo(T));
+        @compileError("Cannot log value of type: " ++ @typeName(T));
+    }
+
+    pub fn slice(self: *LogFmt, key: []const u8, values: anytype) void {
+        const T = @TypeOf(values);
+
+        // Unwrap to get the actual slice
+        const slice_val = switch (@typeInfo(T)) {
+            .optional => {
+                if (values) |v| {
+                    return self.slice(key, v);
+                }
+                return self.writeNull(key);
+            },
+            .null => return self.writeNull(key),
+            .array => values[0..],
+            .pointer => |ptr| blk: {
+                if (ptr.size == .one and @typeInfo(ptr.child) == .array) {
+                    break :blk values[0..];
+                }
+                break :blk values;
+            },
+            else => values,
+        };
+
+        for (slice_val, 0..) |elem, i| {
+            var buffer: [512]u8 = undefined;
+            const indexed_key = std.fmt.bufPrint(&buffer, "{s}.{d}", .{ key, i }) catch continue;
+            self.any(indexed_key, elem);
+        }
+    }
+
     pub fn err(self: *LogFmt, value: anyerror) void {
         const T = @TypeOf(value);
 
@@ -961,6 +1041,76 @@ test "logfmt: fmt" {
     try expectLog(&logfmt, null);
 }
 
+test "logfmt: any" {
+    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .logfmt, .large_buffer_count = 0, .buffer_size = 200 });
+    defer p.deinit();
+
+    var logfmt = try LogFmt.init(t.allocator, p);
+    defer logfmt.deinit(t.allocator);
+
+    const Color = enum { red, green, blue };
+
+    logfmt.any("count", @as(i32, 42));
+    try expectLog(&logfmt, "count=42");
+
+    logfmt.any("score", @as(f64, 3.14));
+    try expectLog(&logfmt, "score=3.14");
+
+    logfmt.any("active", true);
+    try expectLog(&logfmt, "active=Y");
+
+    logfmt.any("name", "alice");
+    try expectLog(&logfmt, "name=alice");
+
+    logfmt.any("color", Color.red);
+    try expectLog(&logfmt, "color=red");
+
+    logfmt.any("maybe", @as(?i32, 99));
+    try expectLog(&logfmt, "maybe=99");
+
+    logfmt.any("maybe", @as(?i32, null));
+    try expectLog(&logfmt, "maybe=null");
+
+    var user = TestUser{ .id = 99 };
+    logfmt.any("user", user);
+    try expectLog(&logfmt, "user=99");
+
+    logfmt.any("user", &user);
+    try expectLog(&logfmt, "user=99");
+}
+
+test "logfmt: slice" {
+    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .logfmt, .large_buffer_count = 0, .buffer_size = 200 });
+    defer p.deinit();
+
+    var logfmt = try LogFmt.init(t.allocator, p);
+    defer logfmt.deinit(t.allocator);
+
+    const ints = [_]i32{ 1, 2, 3 };
+    logfmt.slice("nums", &ints);
+    try expectLog(&logfmt, "nums.0=1 nums.1=2 nums.2=3");
+
+    const names = [_][]const u8{ "alice", "bob", "charlie" };
+    logfmt.slice("users", &names);
+    try expectLog(&logfmt, "users.0=alice users.1=bob users.2=charlie");
+
+    const flags = [_]bool{ true, false, true };
+    logfmt.slice("flags", &flags);
+    try expectLog(&logfmt, "flags.0=Y flags.1=N flags.2=Y");
+
+    const empty = [_]i32{};
+    logfmt.slice("empty", &empty);
+    try expectLog(&logfmt, null);
+
+    const maybe_ints: ?[]const i32 = &[_]i32{ 10, 20 };
+    logfmt.slice("maybe", maybe_ints);
+    try expectLog(&logfmt, "maybe.0=10 maybe.1=20");
+
+    const null_slice: ?[]const i32 = null;
+    logfmt.slice("null_arr", null_slice);
+    try expectLog(&logfmt, "null_arr=null");
+}
+
 fn expectLog(lf: *LogFmt, comptime expected: ?[]const u8) !void {
     defer lf.reset();
 
@@ -989,3 +1139,11 @@ fn expectFmt(lf: *LogFmt, comptime fmt: []const u8, args: anytype) !void {
     const expected = try std.fmt.bufPrint(&buf, "@ts=9999999999999 " ++ fmt ++ "\n", args);
     try t.expectString(expected, out.items);
 }
+
+const TestUser = struct {
+    id: u32,
+
+    pub fn format(self: *const TestUser, writer: *std.Io.Writer) !void {
+        return writer.print("{d}", .{self.id});
+    }
+};

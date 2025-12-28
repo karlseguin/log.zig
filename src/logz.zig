@@ -162,6 +162,14 @@ pub const Logger = struct {
         return self;
     }
 
+    pub fn sliceFmt(self: Logger, key: []const u8, values: anytype, formatter: SliceItemFormatCallback(@TypeOf(values))) Logger {
+        switch (self.inner) {
+            .noop => {},
+            inline else => |l| l.sliceFmt(key, values, formatter),
+        }
+        return self;
+    }
+
     pub fn int(self: Logger, key: []const u8, value: anytype) Logger {
         switch (self.inner) {
             .noop => {},
@@ -315,6 +323,14 @@ pub fn logger() Logger {
 
 pub fn loggerL(lvl: Level) Logger {
     return global.loggerL(lvl);
+}
+
+pub fn SliceItemFormatCallback(comptime T: type) type {
+    const C = std.meta.Child(T);
+    if (@typeInfo(C) == .@"struct") {
+        return *const fn (*const std.meta.Child(T), *std.Io.Writer) error{WriteFailed}!void;
+    }
+    return *const fn (std.meta.Child(T), *std.Io.Writer) error{WriteFailed}!void;
 }
 
 const t = @import("t.zig");

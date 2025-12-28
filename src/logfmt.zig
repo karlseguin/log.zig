@@ -318,36 +318,30 @@ pub const LogFmt = struct {
             .@"union" => {},
             else => {},
         }
-        @compileLog(@typeInfo(T));
         @compileError("Cannot log value of type: " ++ @typeName(T));
     }
 
     pub fn slice(self: *LogFmt, key: []const u8, values: anytype) void {
-        const T = @TypeOf(values);
-
-        // Unwrap to get the actual slice
-        const slice_val = switch (@typeInfo(T)) {
-            .optional => {
-                if (values) |v| {
-                    return self.slice(key, v);
-                }
-                return self.writeNull(key);
-            },
-            .null => return self.writeNull(key),
-            .array => values[0..],
-            .pointer => |ptr| blk: {
-                if (ptr.size == .one and @typeInfo(ptr.child) == .array) {
-                    break :blk values[0..];
-                }
-                break :blk values;
-            },
-            else => values,
-        };
-
-        for (slice_val, 0..) |elem, i| {
+        for (values, 0..) |elem, i| {
             var buffer: [512]u8 = undefined;
             const indexed_key = std.fmt.bufPrint(&buffer, "{s}.{d}", .{ key, i }) catch continue;
             self.any(indexed_key, elem);
+        }
+    }
+
+    pub fn sliceFmt(self: *LogFmt, key: []const u8, values: anytype, formatter: logz.SliceItemFormatCallback(@TypeOf(values))) void {
+        for (values, 0..) |elem, i| {
+            var buffer: [512]u8 = undefined;
+            const indexed_key = std.fmt.bufPrint(&buffer, "{s}.{d}", .{ key, i }) catch continue;
+            const rewind = self.startKeyValue(indexed_key) orelse return;
+            var fmt_writer = FmtWriter.init(self);
+            const res =
+                if (@typeInfo(@TypeOf(elem)) == .@"struct") formatter(&elem, &fmt_writer.interface) else formatter(elem, &fmt_writer.interface);
+            res catch {
+                self.buffer.rollback(rewind);
+                return;
+            };
+            self.buffer.writeByte(' ') catch self.buffer.rollback(rewind);
         }
     }
 
@@ -1065,12 +1059,6 @@ test "logfmt: any" {
     logfmt.any("color", Color.red);
     try expectLog(&logfmt, "color=red");
 
-    logfmt.any("maybe", @as(?i32, 99));
-    try expectLog(&logfmt, "maybe=99");
-
-    logfmt.any("maybe", @as(?i32, null));
-    try expectLog(&logfmt, "maybe=null");
-
     var user = TestUser{ .id = 99 };
     logfmt.any("user", user);
     try expectLog(&logfmt, "user=99");
@@ -1101,14 +1089,30 @@ test "logfmt: slice" {
     const empty = [_]i32{};
     logfmt.slice("empty", &empty);
     try expectLog(&logfmt, null);
+}
 
-    const maybe_ints: ?[]const i32 = &[_]i32{ 10, 20 };
-    logfmt.slice("maybe", maybe_ints);
-    try expectLog(&logfmt, "maybe.0=10 maybe.1=20");
+test "logfmt: sliceFmt" {
+    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .logfmt, .large_buffer_count = 0, .buffer_size = 200 });
+    defer p.deinit();
 
-    const null_slice: ?[]const i32 = null;
-    logfmt.slice("null_arr", null_slice);
-    try expectLog(&logfmt, "null_arr=null");
+    var logfmt = try LogFmt.init(t.allocator, p);
+    defer logfmt.deinit(t.allocator);
+
+    const ints = [_]i32{ 1, 2, 3 };
+    logfmt.sliceFmt("nums", ints, struct {
+        fn format(self: i32, writer: *std.Io.Writer) !void {
+            return writer.print("{d}", .{self + 10});
+        }
+    }.format);
+    try expectLog(&logfmt, "nums.0=11 nums.1=12 nums.2=13");
+
+    const users = [_]TestUser{ .{ .id = 4 }, .{ .id = 10 } };
+    logfmt.sliceFmt("users", users, struct {
+        fn format(self: *const TestUser, writer: *std.Io.Writer) !void {
+            return writer.print("{d}", .{self.id + 10});
+        }
+    }.format);
+    try expectLog(&logfmt, "users.0=14 users.1=20");
 }
 
 fn expectLog(lf: *LogFmt, comptime expected: ?[]const u8) !void {

@@ -90,7 +90,8 @@ The logger can log:
 * `stringSafeZ(key: []const u8, value: ?[*:0]const u8)` - assumes value doesn't need to be encoded
 * `ctx(value: []const u8)` - same as `stringSafe("@ctx", value)`
 * `src(value: std.builtin.SourceLocation)` - Logs an `std.builtin.SourceLocation`, the type of value you get from the `@src()` builtin.
-* slice(key: []const u8, value: anytype)` - writes the slice of values, this calls `any` on each value
+* `slice(key: []const u8, value: anytype)` - writes the slice of values, this calls `any` on each value
+* `sliceFmt(key: []const u8, value: anytype, formatter: *const fn(item, writer) error{WriteFailed}!void)` - writes the slice of values, this calls `formatter` for each item. When using the `json` format, `formatter` is ignored and `sliceFmt` simply calls `slice`.
 * `any(key: []const u8, value: anytype)` - combines all of the above, plus support for structs if they define a "format(self: T, writer: *std.Io.Writer)" method
 
 ### Log Level

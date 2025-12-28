@@ -300,41 +300,20 @@ pub const Json = struct {
     }
 
     pub fn slice(self: *Json, key: []const u8, values: anytype) void {
-        const T = @TypeOf(values);
-
-        // Unwrap to get the actual slice
-        const slice_val = switch (@typeInfo(T)) {
-            .optional => {
-                if (values) |v| {
-                    return self.slice(key, v);
-                }
-                return self.writeNull(key);
-            },
-            .null => return self.writeNull(key),
-            .array => values[0..],
-            .pointer => |ptr| blk: {
-                if (ptr.size == .one and @typeInfo(ptr.child) == .array) {
-                    break :blk values[0..];
-                }
-                break :blk values;
-            },
-            else => values,
-        };
-
         const rewind = self.startKeyValue(key, 0) orelse return;
         self.buffer.writeByte('[') catch {
             self.buffer.rollback(rewind);
             return;
         };
 
-        if (slice_val.len > 0) {
-            self.writeValueOnly(slice_val[0]) catch {
+        if (values.len > 0) {
+            self.writeValueOnly(values[0]) catch {
                 return self.buffer.rollback(rewind);
             };
         }
 
-        if (slice_val.len > 1) {
-            for (slice_val[1..]) |elem| {
+        if (values.len > 1) {
+            for (values[1..]) |elem| {
                 self.buffer.writeByte(',') catch {
                     return self.buffer.rollback(rewind);
                 };
@@ -344,6 +323,11 @@ pub const Json = struct {
             }
         }
         self.buffer.writeAll("],") catch self.buffer.rollback(rewind);
+    }
+
+    pub fn sliceFmt(self: *Json, key: []const u8, values: anytype, formatter: logz.SliceItemFormatCallback(@TypeOf(values))) void {
+        _ = formatter;
+        self.slice(key, values);
     }
 
     // Helper to write a value without a key (for array elements and .any())
@@ -374,13 +358,7 @@ pub const Json = struct {
                         try std.json.Stringify.value(val, .{}, &self.interface);
                     }
                 } else if (ptr.size == .one and @typeInfo(ptr.child) == .@"struct") {
-                    // Handle *struct - check if it has a format method
-                    if (std.meta.hasMethod(ptr.child, "format")) {
-                        var fmt_writer = FmtWriter.init(self);
-                        try val.format(&fmt_writer.interface);
-                    } else {
-                        try std.json.Stringify.value(val, .{}, &self.interface);
-                    }
+                    try std.json.Stringify.value(val, .{}, &self.interface);
                 } else {
                     try std.json.Stringify.value(val, .{}, &self.interface);
                 }
@@ -403,15 +381,7 @@ pub const Json = struct {
                 try self.interface.writeAll(@errorName(val));
                 try self.interface.writeByte('"');
             },
-            .@"struct" => {
-                // Check if the struct has a format method
-                if (std.meta.hasMethod(T, "format")) {
-                    var fmt_writer = FmtWriter.init(self);
-                    try val.format(&fmt_writer.interface);
-                } else {
-                    try std.json.Stringify.value(val, .{}, &self.interface);
-                }
-            },
+            .@"struct" => try std.json.Stringify.value(val, .{}, &self.interface),
             .@"union" => try std.json.Stringify.value(val, .{}, &self.interface),
             .null => try self.interface.writeAll("null"),
             .optional => if (val) |v| {
@@ -1025,10 +995,10 @@ test "json: any" {
 
     var user = TestUser{ .id = 99 };
     json.any("user", user);
-    try expectLog(&json, "\"user\":99");
+    try expectLog(&json, "\"user\":{\"id\":99}");
 
     json.any("user", &user);
-    try expectLog(&json, "\"user\":99");
+    try expectLog(&json, "\"user\":{\"id\":99}");
 }
 
 test "json: slice" {
@@ -1057,14 +1027,31 @@ test "json: slice" {
     const empty = [_]i32{};
     json.slice("empty", &empty);
     try expectLog(&json, "\"empty\":[]");
+}
 
-    const maybe_ints: ?[]const i32 = &[_]i32{ 10, 20 };
-    json.slice("maybe", maybe_ints);
-    try expectLog(&json, "\"maybe\":[10,20]");
+test "json: sliceFmt" {
+    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 200 });
+    defer p.deinit();
 
-    const null_slice: ?[]const i32 = null;
-    json.slice("null_arr", null_slice);
-    try expectLog(&json, "\"null_arr\":null");
+    var json = try Json.init(t.allocator, p);
+    defer json.deinit(t.allocator);
+
+    // sliceFmt just calls slice for JSON
+    const ints = [_]i32{ 1, 2, 3 };
+    json.sliceFmt("nums", ints, struct {
+        fn format(_: i32, _: *std.Io.Writer) !void {
+            unreachable;
+        }
+    }.format);
+    try expectLog(&json, "\"nums\":[1,2,3]");
+
+    const users = [_]TestUser{ .{ .id = 4 }, .{ .id = 10 } };
+    json.sliceFmt("users", users, struct {
+        fn format(_: *const TestUser, _: *std.Io.Writer) !void {
+            unreachable;
+        }
+    }.format);
+    try expectLog(&json, "\"users\":[{\"id\":4},{\"id\":10}]");
 }
 
 fn expectLog(json: *Json, comptime expected: ?[]const u8) !void {

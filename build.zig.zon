@@ -1,12 +1,18 @@
 .{
-	.name = .logz,
-	.paths = .{""},
-	.version = "0.0.0",
-	.fingerprint = 0x89537ef85e16d63b,
-	.dependencies = .{
-		.metrics = .{
-			.url = "https://github.com/karlseguin/metrics.zig/archive/13d8706e1ae921a8cc0d2f88283c1b5412c73e2f.tar.gz",
-			.hash = "metrics-0.0.0-W7G4eP2_AQBKsaql3dhLJ-pkf-RdP-zV3vflJy4N34jC",
-		},
-	},
+    .name = .logz,
+    .paths = .{
+        "LICENSE",
+        "build.zig",
+        "build.zig.zon",
+        "readme.md",
+        "src",
+    },
+    .version = "0.0.0",
+    .fingerprint = 0x89537ef85e16d63b,
+    .dependencies = .{
+        .metrics = .{
+            .url = "https://github.com/karlseguin/metrics.zig/archive/6de29b83a750a06c438d268543e0e3c3c1b309da.tar.gz",
+            .hash = "metrics-0.0.0-W7G4eIegAQD4XxA9Co7Atbw59u_2zvxYf406AZuoAHPM",
+        },
+    },
 }

@@ -5,8 +5,7 @@ const Pool = @import("pool.zig").Pool;
 const Config = @import("config.zig").Config;
 const Buffer = @import("buffer.zig").Buffer;
 
-const File = std.fs.File;
-const Mutex = std.Thread.Mutex;
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const b64 = std.base64.url_safe_no_pad.Encoder;
 
@@ -16,7 +15,9 @@ const t = @import("t.zig");
 const timestamp = if (t.is_test) t.timestamp else std.time.milliTimestamp;
 
 pub const Json = struct {
-    out: File,
+    io: Io,
+
+    out: Io.File,
 
     lvl: logz.Level,
 
@@ -24,12 +25,14 @@ pub const Json = struct {
     meta: []u8,
 
     buffer: Buffer,
+    // wrapper around Buffer to build the message into buffer (outside of a lock)
+    interface: Io.Writer,
 
     multiuse_length: ?usize,
 
-    mutex: *Mutex,
+    mutex: *Io.Mutex,
 
-    interface: std.Io.Writer,
+    writer: *Io.Writer,
 
     pub fn init(allocator: Allocator, pool: *Pool) !Json {
         var buffer = try pool.buffer_pool.create();
@@ -45,12 +48,14 @@ pub const Json = struct {
         }
 
         return .{
+            .io = pool.io,
             .lvl = .None,
             .meta = meta,
             .buffer = buffer,
             .out = pool.file,
             .multiuse_length = null,
             .mutex = &pool.log_mutex,
+            .writer = &pool.writer.interface,
             .interface = .{
                 .buffer = &.{},
                 .vtable = &.{ .drain = Json.drain },
@@ -424,17 +429,17 @@ pub const Json = struct {
     }
 
     pub fn tryLog(self: *Json) !void {
-        try self.logTo(self.out);
+        return self.logTo(self.writer);
     }
 
     pub fn log(self: *Json) void {
-        self.logTo(self.out) catch |e| {
+        self.tryLog() catch |e| {
             const msg = "logz: Failed to write log. Log will be dropped. Error was: {}";
-            std.log.err(msg, .{e});
+           std.log.err(msg, .{e});
         };
     }
 
-    pub fn logTo(self: *Json, out: anytype) !void {
+    pub fn logTo(self: *Json, writer: *Io.Writer) !void {
         const buffer = &self.buffer;
         var pos = buffer.pos;
 
@@ -501,21 +506,25 @@ pub const Json = struct {
             flush_newline = true;
         }
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        try out.writeAll(meta[0..meta_len]);
+        var vec = [4][]const u8{
+            meta[0..meta_len], "", "", "",
+        };
+        var index: usize = 1;
         if (buf.ptr != static.ptr) {
             // if we had to get a larger buffer, than static should be filled
-            try out.writeAll(static);
+            vec[1] = static;
+            index = 2;
+        }
+        vec[index] = buf[0..pos];
+        if (flush_newline) {
+            index += 1;
+            vec[index] = "\n";
         }
 
-        // we should always write a trailing space, the last of which, we can
-        // now replace with our closing bracket
-        try out.writeAll(buf[0..pos]);
-        if (flush_newline) {
-            try out.writeAll("\n");
-        }
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        try writer.writeVecAll(vec[0..index+1]);
+        try writer.flush();
     }
 
     fn startKeyValue(self: *Json, key: []const u8, min_value_len: usize) ?Buffer.RewindState {
@@ -590,7 +599,7 @@ pub const Json = struct {
 };
 
 test "json: static buffer" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 35 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 35 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -620,7 +629,7 @@ test "json: static buffer" {
 }
 
 test "json: large buffer" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 40, .buffer_size = 20 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 40, .buffer_size = 20 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -662,7 +671,7 @@ test "json: large buffer" {
 }
 
 test "json: buffer fuzz" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 25, .buffer_size = 10 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 25, .buffer_size = 10 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -697,7 +706,7 @@ test "json: buffer fuzz" {
 }
 
 test "json: stringZ" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -718,7 +727,7 @@ test "json: stringZ" {
 }
 
 test "json: binary" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -747,7 +756,7 @@ test "json: binary" {
 }
 
 test "json: int" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 15, .buffer_size = 10 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 15, .buffer_size = 10 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -784,7 +793,7 @@ test "json: int" {
 }
 
 test "json: int special values" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -803,7 +812,7 @@ test "json: int special values" {
 }
 
 test "json: bool null/true/false" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 20 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 20 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -820,7 +829,7 @@ test "json: bool null/true/false" {
 }
 
 test "json: float" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 15, .buffer_size = 10 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 15, .buffer_size = 10 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -857,7 +866,7 @@ test "json: float" {
 }
 
 test "json: error" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -876,7 +885,7 @@ test "json: error" {
 }
 
 test "json: ctx" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -887,7 +896,7 @@ test "json: ctx" {
 }
 
 test "json: src" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 100 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -900,7 +909,7 @@ test "json: src" {
 
 test "json: src larger" {
     // more tests for this since it's the only code that calls writeObjet for now
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 70, .buffer_size = 30 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 70, .buffer_size = 30 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -913,7 +922,7 @@ test "json: src larger" {
 
 test "json: src doesn't fit" {
     // more tests for this since it's the only code that calls writeObjet for now
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 30, .buffer_size = 10 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 30, .buffer_size = 10 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -924,7 +933,7 @@ test "json: src doesn't fit" {
 }
 
 test "json: tabs" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -935,7 +944,7 @@ test "json: tabs" {
 }
 
 test "json: fmt" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 1, .large_buffer_size = 20, .buffer_size = 10 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -964,7 +973,7 @@ test "json: fmt" {
 }
 
 test "json: any" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 200 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 200 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -1002,7 +1011,7 @@ test "json: any" {
 }
 
 test "json: slice" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 200 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 200 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -1030,7 +1039,7 @@ test "json: slice" {
 }
 
 test "json: sliceFmt" {
-    const p = try Pool.init(t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 200 });
+    const p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .encoding = .json, .large_buffer_count = 0, .buffer_size = 200 });
     defer p.deinit();
 
     var json = try Json.init(t.allocator, p);
@@ -1057,30 +1066,28 @@ test "json: sliceFmt" {
 fn expectLog(json: *Json, comptime expected: ?[]const u8) !void {
     defer json.reset();
 
-    var out: std.ArrayList(u8) = .empty;
-    try out.ensureTotalCapacity(t.allocator, 100);
-    defer out.deinit(t.allocator);
+    var out: std.Io.Writer.Allocating = .init(t.allocator);
+    defer out.deinit();
 
-    try json.logTo(out.writer(t.allocator));
+    try json.logTo(&out.writer);
     if (expected) |e| {
-        try t.expectString("{\"@ts\":9999999999999," ++ e ++ "}\n", out.items);
+        try t.expectString("{\"@ts\":9999999999999," ++ e ++ "}\n", out.written());
     } else {
-        try t.expectEqual(0, out.items.len);
+        try t.expectEqual(0, out.written().len);
     }
 }
 
 fn expectFmt(json: *Json, comptime fmt: []const u8, args: anytype) !void {
     defer json.reset();
 
-    var out: std.ArrayList(u8) = .empty;
-    try out.ensureTotalCapacity(t.allocator, 100);
-    defer out.deinit(t.allocator);
+    var out: std.Io.Writer.Allocating = .init(t.allocator);
+    defer out.deinit();
 
-    try json.logTo(out.writer(t.allocator));
+    try json.logTo(&out.writer);
 
     var buf: [200]u8 = undefined;
     const expected = try std.fmt.bufPrint(&buf, "{{\"@ts\":9999999999999," ++ fmt ++ "}}\n", args);
-    try t.expectString(expected, out.items);
+    try t.expectString(expected, out.written());
 }
 
 const TestUser = struct {

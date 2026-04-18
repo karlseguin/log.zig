@@ -3,7 +3,7 @@ const std = @import("std");
 const metrics = @import("metrics.zig");
 const Config = @import("config.zig").Config;
 
-const Mutex = std.Thread.Mutex;
+const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
 const M = @This();
@@ -361,7 +361,8 @@ pub const AttributeWriter = struct {
 };
 
 pub const Pool = struct {
-    mutex: Mutex,
+    io: Io,
+    mutex: Io.Mutex,
     buffers: [][]u8,
     available: usize,
     allocator: Allocator,
@@ -369,7 +370,7 @@ pub const Pool = struct {
     large_buffer_size: usize,
     strategy: Config.LargeBufferStrategy,
 
-    pub fn init(allocator: Allocator, config: *const Config) !Pool {
+    pub fn init(io: Io,allocator: Allocator, config: *const Config) !Pool {
         const large_buffer_size = config.large_buffer_size;
         const large_buffer_count = if (large_buffer_size == 0) 0 else config.large_buffer_count;
         const buffers = try allocator.alloc([]u8, large_buffer_count);
@@ -388,7 +389,8 @@ pub const Pool = struct {
         }
 
         return .{
-            .mutex = .{},
+            .io = io,
+            .mutex = .init,
             .buffers = buffers,
             .allocator = allocator,
             .available = large_buffer_count,
@@ -417,12 +419,13 @@ pub const Pool = struct {
     }
 
     pub fn acquireLarge(self: *Pool) !?[]u8 {
+        const io = self.io;
         const buffers = self.buffers;
 
-        self.mutex.lock();
+        self.mutex.lockUncancelable(io);
         const available = self.available;
         if (available == 0) {
-            self.mutex.unlock();
+            self.mutex.unlock(io);
 
             metrics.largeBufferEmpty();
             if (self.strategy == .drop) {
@@ -434,24 +437,25 @@ pub const Pool = struct {
         const index = available - 1;
         const buf = buffers[index];
         self.available = index;
-        self.mutex.unlock();
+        self.mutex.unlock(io);
         metrics.largeBufferAcquire();
         return buf;
     }
 
     pub fn releaseLarge(self: *Pool, buf: []u8) void {
+        const io = self.io;
         var buffers = self.buffers;
 
-        self.mutex.lock();
+        self.mutex.lockUncancelable(io);
         const available = self.available;
         if (available == buffers.len) {
-            self.mutex.unlock();
+            self.mutex.unlock(io);
             self.allocator.free(buf);
             return;
         }
         buffers[available] = buf;
         self.available = available + 1;
-        self.mutex.unlock();
+        self.mutex.unlock(io);
     }
 };
 
@@ -459,7 +463,7 @@ const t = @import("t.zig");
 // Buffer is extensively tested through the LogFmt and Json tests
 
 test "pool: create" {
-    var p = try Pool.init(t.allocator, &.{ .large_buffer_count = 2, .large_buffer_size = 15, .buffer_size = 10 });
+    var p = try Pool.init(t.io, t.allocator, &.{ .large_buffer_count = 2, .large_buffer_size = 15, .buffer_size = 10 });
     defer p.deinit();
 
     var b = try p.create();
@@ -471,7 +475,7 @@ test "pool: create" {
 }
 
 test "pool: acquire and release with drop strategy" {
-    var p = try Pool.init(t.allocator, &.{ .large_buffer_count = 2, .large_buffer_size = 15, .buffer_size = 10, .large_buffer_strategy = .drop });
+    var p = try Pool.init(t.io, t.allocator, &.{ .large_buffer_count = 2, .large_buffer_size = 15, .buffer_size = 10, .large_buffer_strategy = .drop });
     defer p.deinit();
 
     const i1a = (try p.acquireLarge()) orelse unreachable;
@@ -493,7 +497,7 @@ test "pool: acquire and release with drop strategy" {
 }
 
 test "pool: acquire and release with create strategy" {
-    var p = try Pool.init(t.allocator, &.{ .large_buffer_count = 2, .large_buffer_size = 15, .buffer_size = 10 });
+    var p = try Pool.init(t.io, t.allocator, &.{ .large_buffer_count = 2, .large_buffer_size = 15, .buffer_size = 10 });
     defer p.deinit();
 
     const i1a = (try p.acquireLarge()) orelse unreachable;
@@ -519,7 +523,7 @@ test "pool: acquire and release with create strategy" {
 }
 
 test "pool: threadsafety" {
-    var p = try Pool.init(t.allocator, &.{ .large_buffer_count = 3, .large_buffer_size = 5, .buffer_size = 2 });
+    var p = try Pool.init(t.io, t.allocator, &.{ .large_buffer_count = 3, .large_buffer_size = 5, .buffer_size = 2 });
     defer p.deinit();
 
     // initialize this to 0 since we're asserting that it's 0
@@ -536,17 +540,14 @@ test "pool: threadsafety" {
     t3.join();
 }
 
-fn testPool(p: *Pool) void {
-    var r = t.getRandom();
-    const random = r.random();
-
+fn testPool(p: *Pool) !void {
     for (0..5000) |_| {
         var buf = p.acquireLarge() catch unreachable orelse unreachable;
         // no other thread should have set this to 255
         std.debug.assert(buf[0] == 0);
 
         buf[0] = 255;
-        std.Thread.sleep(random.uintAtMost(u32, 100000));
+        try t.io.sleep(.fromMicroseconds(1000), .awake);
         buf[0] = 0;
         p.releaseLarge(buf);
     }

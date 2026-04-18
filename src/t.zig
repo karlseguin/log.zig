@@ -1,5 +1,6 @@
 const std = @import("std");
 
+pub const io = std.testing.io;
 pub const expect = std.testing.expect;
 pub const allocator = std.testing.allocator;
 
@@ -9,14 +10,6 @@ pub const expectError = std.testing.expectError;
 pub const expectString = std.testing.expectEqualStrings;
 pub const expectSuffix = std.testing.expectStringEndsWith;
 pub const expectPrefix = std.testing.expectStringStartsWith;
-
-pub var out_mutex = std.Thread.Mutex{};
-
-pub fn getRandom() std.Random.DefaultPrng {
-    var seed: u64 = undefined;
-    std.posix.getrandom(std.mem.asBytes(&seed)) catch unreachable;
-    return std.Random.DefaultPrng.init(seed);
-}
 
 pub fn timestamp() i64 {
     return 9999999999999;

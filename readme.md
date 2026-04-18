@@ -2,23 +2,21 @@ Structured Logging for Zig
 
 logz is an opinionated structured logger that outputs to stdout, stderr, a file or a custom writer using logfmt or JSON. It aims to minimize runtime memory allocation by using a pool of pre-allocated loggers. 
 
+## Zig Version
+This is for Zig 0.16.0. Use the [zig-0.15](https://github.com/karlseguin/log.zig/tree/zig-0.15) branch for Zig 0.15 or the [dev](https://github.com/karlseguin/log.zig/tree/dev) which may or may not be up to date with zig dev.
+
 # Metrics
 If you're looking for metrics, check out my <a href="https://github.com/karlseguin/metrics.zig">prometheus library for Zig</a>.
 
 # Installation
 This library supports native Zig module (introduced in 0.11). Add a "logz" dependency to your `build.zig.zon`.
 
-## Zig 0.11
-Please use the [zig-0.11](https://github.com/karlseguin/log.zig/tree/zig-0.11) branch for a version of the library which is compatible with Zig 0.11.
-
-The master branch of this library follows Zig's master.
-
 # Usage
 For simple cases, a global logging pool can be configured and used:
 
 ```zig
 // initialize a logging pool
-try logz.setup(allocator, .{
+try logz.setup(io, allocator, .{
     .level = .Info, 
     .pool_size = 100,
     .buffer_size = 4096, 
@@ -39,7 +37,7 @@ logz.err().src(@src()).err(err).log();
 Alternatively, 1 or more explicit pools can be created:
 
 ```zig
-var requestLogs = try logz.Pool.init(allocator, .{});
+var requestLogs = try logz.Pool.init(io, allocator, .{});
 defer requestLogs.deinit();
 
 // requestLogs can be shared across threads
@@ -107,7 +105,7 @@ Pools are configured with a minimum log level:
 When getting a logger for a value lower than the configured level, a noop logger is returned. This logger exposes the same API, but does nothing.
 
 ```zig
-var logs = try logz.Pool.init(allocator, .{.level = .Error});
+var logs = try logz.Pool.init(io, allocator, .{.level = .Error});
 
 // this won't do anything
 logs.info().bool("noop", true).log();
@@ -116,7 +114,7 @@ logs.info().bool("noop", true).log();
 The noop logger is meant to be relatively fast. But it doesn't eliminate any complicated values you might pass. Consider this example:
 
 ```zig
-var logs = try logz.Pool.init(allocator, .{.level = .None});
+var logs = try logz.Pool.init(io, allocator, .{.level = .None});
 try logs.warn().
     string("expensive", expensiveCall()).
     log();
@@ -209,7 +207,7 @@ The call to `log` can fail. On failure, a message is written using `std.log.err`
 ## Advanced Usage
 
 ### Pre-setup
-`setup(CONFIG)` can be called multiple times, but isn't thread safe. The idea is that, at the very start, `setup` can be called with a minimal config so that any startup errors can be logged. After startup, but before the full application begins, `setup` is called a 2nd time with the correct config. Something like:
+`setup(io, allocator, CONFIG)` can be called multiple times, but isn't thread safe. The idea is that, at the very start, `setup` can be called with a minimal config so that any startup errors can be logged. After startup, but before the full application begins, `setup` is called a 2nd time with the correct config. Something like:
 
 ```zig
 pub fn main() !void {
@@ -217,7 +215,7 @@ pub fn main() !void {
     const allocator = general_purpose_allocator.allocator();
 
     // minimal config so that we can use logz will setting things up
-    try logz.setup(.{
+    try logz.setup(io, allocator, .{
         .pool_size = 2, 
         .max_size = 4096, 
         .level = .Warn
@@ -230,7 +228,7 @@ pub fn main() !void {
     // ok, now setup our full logger (which we couldn't do until we read 
     // our config, which could have failed)
 
-    try logz.setup(.{
+    try logz.setup(io, allocator, .{
         .pool_size = config.log.pool_size, 
         .max_size = config.log.max_size,
         .level = config.log.level
@@ -247,7 +245,7 @@ The prefix is written as-is.
 ```zig
 // prefix can be anything []const u8. It doesn't have to be a key=value
 // it will not be encoded if needed, and doesn't even have to be a valid string.
-var p = try logz.Pool.init(allocator, .{.prefix = "keemun"});
+var p = try logz.Pool.init(io, allocator, .{.prefix = "keemun"});
 defer p.deinit();
 
 p.info().boolean("tea", true).log();
@@ -258,7 +256,7 @@ The above will generate a log line: `keemun @ts=TIMESTAMP @l=INFO tea=Y"`
 When using `.json` encoding, your prefix must begin the object:
 
 ```zig:
-var p = try logz.Pool.init(allocator, .{.prefix = "=={"});
+var p = try logz.Pool.init(io, allocator, .{.prefix = "=={"});
 defer p.deinit();
 
 p.info().boolean("tea", true).log();
@@ -362,7 +360,7 @@ var leaking_gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const leaking_allocator = leaking_gpa.allocator();
 
 test {
-    try logz.setup(leaking_allocator, .{.pool_size = 5, .level = .None});
+    try logz.setup(testing.io, leaking_allocator, .{.pool_size = 5, .level = .None});
 
     // rest of your setup, such as::
     std.testing.refAllDecls(@This());

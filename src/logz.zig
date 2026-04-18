@@ -28,11 +28,11 @@ pub fn writeMetrics(writer: anytype) !void {
     return @import("metrics.zig").write(writer);
 }
 
-pub fn setup(allocator: Allocator, config: Config) !void {
+pub fn setup(io: std.Io, allocator: Allocator, config: Config) !void {
     if (init) {
         global.deinit();
     }
-    global = try Pool.init(allocator, config);
+    global = try Pool.init(io, allocator, config);
     init = true;
 }
 

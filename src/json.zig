@@ -12,7 +12,7 @@ const b64 = std.base64.url_safe_no_pad.Encoder;
 const META_LEN = "{\"@ts\":9999999999999,\"@l\":\"ERROR\",".len;
 
 const t = @import("t.zig");
-const timestamp = if (t.is_test) t.timestamp else std.time.milliTimestamp;
+const timestamp = @import("timestamp.zig").nowMilliseconds;
 
 pub const Json = struct {
     io: Io,
@@ -460,7 +460,7 @@ pub const Json = struct {
                 // whitespce in json is ignored, and putting it in keeps all our offsets the same
                 @memcpy(meta_buf[0..7], " \"@ts\":");
             }
-            _ = std.fmt.printInt(meta_buf[7..], timestamp(), 10, .lower, .{});
+            _ = std.fmt.printInt(meta_buf[7..], timestamp(self.io), 10, .lower, .{});
 
             switch (self.lvl) {
                 .Debug => {

@@ -12,7 +12,7 @@ const b64 = std.base64.url_safe_no_pad.Encoder;
 const META_LEN = "@ts=9999999999999 @L=ERROR ".len;
 
 const t = @import("t.zig");
-const timestamp = if (t.is_test) t.timestamp else std.time.milliTimestamp;
+const timestamp = @import("timestamp.zig").nowMilliseconds;
 
 pub const LogFmt = struct {
     io: Io,
@@ -404,7 +404,7 @@ pub const LogFmt = struct {
             const meta_buf = meta[prefix_len..];
 
             @memcpy(meta_buf[0..4], "@ts=");
-            _ = std.fmt.printInt(meta_buf[4..], timestamp(), 10, .lower, .{});
+            _ = std.fmt.printInt(meta_buf[4..], timestamp(self.io), 10, .lower, .{});
 
             switch (self.lvl) {
                 .Debug => {

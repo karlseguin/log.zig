@@ -1,10 +1,16 @@
+// in your build.zig, you can specify a custom test runner:
+// const tests = b.addTest(.{
+//    .root_module = $MODULE_BEING_TESTED,
+//    .test_runner = .{ .path = b.path("test_runner.zig"), .mode = .simple },
+// });
+
 const std = @import("std");
 const Io = std.Io;
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
-const BORDER = "=" ** 80;
+const BORDER: [80]u8 = @splat('=');
 
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
@@ -35,6 +41,9 @@ pub fn main(init: std.process.Init) !void {
 
     Printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
+    var after_each: std.ArrayList(std.builtin.TestFn) = .empty;
+    defer after_each.deinit(allocator);
+
     for (builtin.test_functions) |t| {
         if (isSetup(t)) {
             t.func() catch |err| {
@@ -42,10 +51,13 @@ pub fn main(init: std.process.Init) !void {
                 return err;
             };
         }
+        if (isAfterEach(t)) {
+            try after_each.append(allocator, t);
+        }
     }
 
     for (builtin.test_functions) |t| {
-        if (isSetup(t) or isTeardown(t)) {
+        if (isSetup(t) or isTeardown(t) or isAfterEach(t)) {
             continue;
         }
 
@@ -72,13 +84,21 @@ pub fn main(init: std.process.Init) !void {
         };
 
         current_test = friendly_name;
-        std.testing.allocator_instance = .{};
+        std.testing.allocator_instance = .init(std.heap.page_allocator, .{
+            .canary = 0xc3a701ba,
+            .check_write_after_free = true,
+        });
         const result = t.func();
+
+        for (after_each.items) |ae| {
+            try ae.func();
+        }
+
         current_test = null;
 
         const ns_taken = slowest.endTiming(io, friendly_name);
 
-        if (std.testing.allocator_instance.deinit() == .leak) {
+        if (std.testing.allocator_instance.deinit() > 0) {
             leak += 1;
             Printer.status(.fail, "\n{s}\n\"{s}\" - Memory Leak\n{s}\n", .{ BORDER, friendly_name, BORDER });
         }
@@ -284,4 +304,8 @@ fn isSetup(t: std.builtin.TestFn) bool {
 
 fn isTeardown(t: std.builtin.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterAll");
+}
+
+fn isAfterEach(t: std.builtin.TestFn) bool {
+    return std.mem.endsWith(u8, t.name, "tests:afterEach");
 }

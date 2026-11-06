@@ -54,14 +54,11 @@ pub const Pool = struct {
                 // https://github.com/ziglang/zig/issues/14375
                 // Yes, this is still true in 0.16 as far as I can tell.
 
-                var f = Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch |open_err| switch (open_err) {
+                const f = Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch |open_err| switch (open_err) {
                     error.FileNotFound => break :blk try Io.Dir.cwd().createFile(io, path, .{}),
                     else => return open_err,
                 };
 
-                const stat = try f.stat(io);
-                var file_writer = f.writer(io, &.{});
-                try file_writer.seekTo(stat.size);
                 break :blk f;
             },
         };
@@ -82,6 +79,8 @@ pub const Pool = struct {
         };
 
         pool.writer = pool.file.writer(io, &pool.writer_buf);
+        const stat = try pool.file.stat(io);
+        try pool.writer.seekTo(stat.size);
 
         var initialized: usize = 0;
         errdefer {

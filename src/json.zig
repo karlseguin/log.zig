@@ -458,7 +458,7 @@ pub const Json = struct {
                 @memcpy(meta_buf[0..7], "{\"@ts\":");
             } else {
                 // whitespce in json is ignored, and putting it in keeps all our offsets the same
-                @memcpy(meta_buf[0..7], " \"@ts\":");
+                @memcpy(meta_buf[0..8], " {\"@ts\":");
             }
             _ = std.fmt.printInt(meta_buf[7..], timestamp(self.io), 10, .lower, .{});
 

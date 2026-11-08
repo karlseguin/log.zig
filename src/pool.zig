@@ -79,8 +79,13 @@ pub const Pool = struct {
         };
 
         pool.writer = pool.file.writer(io, &pool.writer_buf);
-        const stat = try pool.file.stat(io);
-        try pool.writer.seekTo(stat.size);
+        if (config.output == .file) {
+            // The writer is positional: it tracks its own offset (starting at 0)
+            // rather than using the file's cursor, so we need to move it to the
+            // end to append to an existing file.
+            const stat = try pool.file.stat(io);
+            try pool.writer.seekTo(stat.size);
+        }
 
         var initialized: usize = 0;
         errdefer {
@@ -602,6 +607,31 @@ test "pool: logfmt log" {
         try p.fatal().string("aaa", "zzzz").logTo(&out.writer);
         try t.expectString("", out.written());
     }
+}
+
+test "pool: file output appends to existing file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(t.allocator, ".zig-cache/tmp/{s}/test.log", .{tmp.sub_path});
+    defer t.allocator.free(path);
+
+    {
+        var p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .output = .{ .file = path } });
+        defer p.deinit();
+        p.info().int("id", 1).log();
+    }
+
+    {
+        // re-opening the file must append, not overwrite from the start
+        var p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .output = .{ .file = path } });
+        defer p.deinit();
+        p.info().int("id", 2).log();
+    }
+
+    const content = try tmp.dir.readFileAlloc(t.io, "test.log", t.allocator, .unlimited);
+    defer t.allocator.free(content);
+    try t.expectString("@ts=9999999999999 @l=INFO id=1\n@ts=9999999999999 @l=INFO id=2\n", content);
 }
 
 test "pool: logfmt prefix" {

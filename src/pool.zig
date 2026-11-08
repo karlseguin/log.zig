@@ -54,14 +54,11 @@ pub const Pool = struct {
                 // https://github.com/ziglang/zig/issues/14375
                 // Yes, this is still true in 0.16 as far as I can tell.
 
-                var f = Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch |open_err| switch (open_err) {
+                const f = Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch |open_err| switch (open_err) {
                     error.FileNotFound => break :blk try Io.Dir.cwd().createFile(io, path, .{}),
                     else => return open_err,
                 };
 
-                const stat = try f.stat(io);
-                var file_writer = f.writer(io, &.{});
-                try file_writer.seekTo(stat.size);
                 break :blk f;
             },
         };
@@ -82,6 +79,13 @@ pub const Pool = struct {
         };
 
         pool.writer = pool.file.writer(io, &pool.writer_buf);
+        if (config.output == .file) {
+            // The writer is positional: it tracks its own offset (starting at 0)
+            // rather than using the file's cursor, so we need to move it to the
+            // end to append to an existing file.
+            const stat = try pool.file.stat(io);
+            try pool.writer.seekTo(stat.size);
+        }
 
         var initialized: usize = 0;
         errdefer {
@@ -603,6 +607,31 @@ test "pool: logfmt log" {
         try p.fatal().string("aaa", "zzzz").logTo(&out.writer);
         try t.expectString("", out.written());
     }
+}
+
+test "pool: file output appends to existing file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(t.allocator, ".zig-cache/tmp/{s}/test.log", .{tmp.sub_path});
+    defer t.allocator.free(path);
+
+    {
+        var p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .output = .{ .file = path } });
+        defer p.deinit();
+        p.info().int("id", 1).log();
+    }
+
+    {
+        // re-opening the file must append, not overwrite from the start
+        var p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .output = .{ .file = path } });
+        defer p.deinit();
+        p.info().int("id", 2).log();
+    }
+
+    const content = try tmp.dir.readFileAlloc(t.io, "test.log", t.allocator, .unlimited);
+    defer t.allocator.free(content);
+    try t.expectString("@ts=9999999999999 @l=INFO id=1\n@ts=9999999999999 @l=INFO id=2\n", content);
 }
 
 test "pool: logfmt prefix" {

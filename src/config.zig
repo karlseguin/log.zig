@@ -12,6 +12,7 @@ pub const Config = struct {
     large_buffer_count: u16 = 8,
     large_buffer_size: usize = 16384,
     large_buffer_strategy: LargeBufferStrategy = .create,
+    timestamp: Timestamp = .number,
 
     pub const Output = union(enum) {
         stdout,
@@ -32,5 +33,11 @@ pub const Config = struct {
     pub const LargeBufferStrategy = enum {
         create,
         drop,
+    };
+
+    pub const Timestamp = enum {
+        number,
+        iso,
+        sql,
     };
 };

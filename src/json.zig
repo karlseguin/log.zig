@@ -9,18 +9,21 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const b64 = std.base64.url_safe_no_pad.Encoder;
 
-const META_LEN = "{\"@ts\":9999999999999,\"@l\":\"ERROR\",".len;
+const META_NUMBER_LEN = "{\"@ts\":9999999999999,\"@l\":\"ERROR\",".len;
+const META_ISO_SQL_LEN = "{\"@ts\"=\"9999-99-99T99:99:99\",\"@l\":\"ERROR\",".len;
 
 const t = @import("t.zig");
-const timestamp = @import("timestamp.zig").nowMilliseconds;
+const timestamp = @import("timestamp.zig");
 
 pub const Json = struct {
     io: Io,
+    allocator: std.mem.Allocator,
 
     out: Io.File,
 
     lvl: logz.Level,
 
+    meta_base_len: usize,
     // space for a configured prefix + the @ts=$time and @l=$level meta fields
     meta: []u8,
 
@@ -34,11 +37,14 @@ pub const Json = struct {
 
     writer: *Io.Writer,
 
+    timestamp: Config.Timestamp,
+
     pub fn init(allocator: Allocator, pool: *Pool) !Json {
         var buffer = try pool.buffer_pool.create();
         errdefer buffer.deinit();
 
-        const meta_len = META_LEN + if (pool.config.prefix) |p| p.len else 0;
+        const meta_base_len = (if (pool.config.timestamp == Config.Timestamp.number) META_NUMBER_LEN else META_ISO_SQL_LEN);
+        const meta_len = meta_base_len + if (pool.config.prefix) |p| p.len else 0;
 
         const meta = try allocator.alloc(u8, meta_len);
         errdefer allocator.free(meta);
@@ -49,6 +55,8 @@ pub const Json = struct {
 
         return .{
             .io = pool.io,
+            .allocator = allocator,
+            .meta_base_len = meta_base_len,
             .lvl = .None,
             .meta = meta,
             .buffer = buffer,
@@ -56,6 +64,7 @@ pub const Json = struct {
             .multiuse_length = null,
             .mutex = &pool.log_mutex,
             .writer = &pool.writer.interface,
+            .timestamp = pool.config.timestamp,
             .interface = .{
                 .buffer = &.{},
                 .vtable = &.{ .drain = Json.drain },
@@ -435,7 +444,7 @@ pub const Json = struct {
     pub fn log(self: *Json) void {
         self.tryLog() catch |e| {
             const msg = "logz: Failed to write log. Log will be dropped. Error was: {}";
-           std.log.err(msg, .{e});
+            std.log.err(msg, .{e});
         };
     }
 
@@ -451,7 +460,7 @@ pub const Json = struct {
         const meta = self.meta;
         const meta_len = blk: {
             // append timestamp to our meta
-            const prefix_len = meta.len - META_LEN;
+            const prefix_len = meta.len - self.meta_base_len;
             const meta_buf = meta[prefix_len..];
 
             if (prefix_len == 0) {
@@ -460,31 +469,40 @@ pub const Json = struct {
                 // whitespce in json is ignored, and putting it in keeps all our offsets the same
                 @memcpy(meta_buf[0..7], " \"@ts\":");
             }
-            _ = std.fmt.printInt(meta_buf[7..], timestamp(self.io), 10, .lower, .{});
+
+            var tsEnd: usize = 20;
+            if (self.timestamp == Config.Timestamp.number) {
+                _ = std.fmt.printInt(meta_buf[7..], timestamp.nowMilliseconds(self.io), 10, .lower, .{});
+            } else {
+                tsEnd = 28;
+                @memcpy(meta_buf[7..8], "\"");
+                @memcpy(meta_buf[8..27], try timestamp.nowFormatted(self.io, self.allocator, if (self.timestamp == Config.Timestamp.iso) .iso else .sql));
+                @memcpy(meta_buf[27..28], "\"");
+            }
 
             switch (self.lvl) {
                 .Debug => {
-                    @memcpy(meta_buf[20..], ",\"@l\":\"DEBUG\",");
+                    @memcpy(meta_buf[tsEnd..], ",\"@l\":\"DEBUG\",");
                     break :blk meta.len;
                 },
                 .Info => {
-                    @memcpy(meta_buf[20..33], ",\"@l\":\"INFO\",");
+                    @memcpy(meta_buf[tsEnd .. self.meta_base_len - 1], ",\"@l\":\"INFO\",");
                     break :blk meta.len - 1;
                 },
                 .Warn => {
-                    @memcpy(meta_buf[20..33], ",\"@l\":\"WARN\",");
+                    @memcpy(meta_buf[tsEnd .. self.meta_base_len - 1], ",\"@l\":\"WARN\",");
                     break :blk meta.len - 1;
                 },
                 .Error => {
-                    @memcpy(meta_buf[20..], ",\"@l\":\"ERROR\",");
+                    @memcpy(meta_buf[tsEnd..], ",\"@l\":\"ERROR\",");
                     break :blk meta.len;
                 },
                 .Fatal => {
-                    @memcpy(meta_buf[20..], ",\"@l\":\"FATAL\",");
+                    @memcpy(meta_buf[tsEnd..], ",\"@l\":\"FATAL\",");
                     break :blk meta.len;
                 },
                 else => {
-                    meta_buf[20] = ',';
+                    meta_buf[tsEnd] = ',';
                     break :blk meta.len - 13;
                 },
             }
@@ -523,7 +541,7 @@ pub const Json = struct {
 
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        try writer.writeVecAll(vec[0..index+1]);
+        try writer.writeVecAll(vec[0 .. index + 1]);
         try writer.flush();
     }
 

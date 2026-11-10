@@ -11,18 +11,28 @@ pub fn nowMilliseconds(io: std.Io) i64 {
     return std.Io.Clock.real.now(io).toMilliseconds();
 }
 
-pub fn nowFormatted(io: std.Io, allocator: std.mem.Allocator, format: Format) ![]const u8 {
+pub fn nowFormatted(io: std.Io, format: Format) ![]const u8 {
     const timestamp = std.Io.Clock.real.now(io);
-    const unix_sec = @divTrunc(timestamp.toNanoseconds(), std.time.ns_per_s);
-    const es = std.time.epoch.EpochSeconds{ .secs = @intCast(unix_sec) };
+    const es = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp.toSeconds()) };
     const day_secs = es.getDaySeconds();
     const year_day = es.getEpochDay().calculateYearDay();
     const month_day = year_day.calculateMonthDay();
-    return try std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}{s}{d:0>2}:{d:0>2}:{d:0>2}", .{
+    if (format == .iso) {
+        var buffer: [20]u8 = undefined;
+        return try std.fmt.bufPrint(&buffer, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+            year_day.year,
+            month_day.month.numeric(),
+            month_day.day_index + 1,
+            day_secs.getHoursIntoDay(),
+            day_secs.getMinutesIntoHour(),
+            day_secs.getSecondsIntoMinute(),
+        });
+    }
+    var buffer: [19]u8 = undefined;
+    return try std.fmt.bufPrint(&buffer, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
         year_day.year,
         month_day.month.numeric(),
         month_day.day_index + 1,
-        if (format == .iso) "T" else " ",
         day_secs.getHoursIntoDay(),
         day_secs.getMinutesIntoHour(),
         day_secs.getSecondsIntoMinute(),

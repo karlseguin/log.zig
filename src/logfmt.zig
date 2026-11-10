@@ -10,14 +10,14 @@ const Allocator = std.mem.Allocator;
 const b64 = std.base64.url_safe_no_pad.Encoder;
 
 const META_NUMBER_LEN = "@ts=9999999999999 @L=ERROR ".len;
-const META_ISO_SQL_LEN = "@ts=9999-99-99T99:99:99 @L=ERROR ".len;
+const META_ISO_LEN = "@ts=9999-99-99T99:99:99Z @L=ERROR ".len;
+const META_SQL_LEN = "@ts=9999-99-99 99:99:99 @L=ERROR ".len;
 
 const t = @import("t.zig");
 const timestamp = @import("timestamp.zig");
 
 pub const LogFmt = struct {
     io: Io,
-    allocator: std.mem.Allocator,
 
     lvl: logz.Level,
 
@@ -41,7 +41,12 @@ pub const LogFmt = struct {
         var buffer = try pool.buffer_pool.create();
         errdefer buffer.deinit();
 
-        const meta_base_len = (if (pool.config.timestamp == Config.Timestamp.number) META_NUMBER_LEN else META_ISO_SQL_LEN);
+        var meta_base_len = META_NUMBER_LEN;
+        if (pool.config.timestamp == Config.Timestamp.iso) {
+            meta_base_len = META_ISO_LEN;
+        } else if (pool.config.timestamp == Config.Timestamp.sql) {
+            meta_base_len = META_SQL_LEN;
+        }
         const meta_len = meta_base_len + if (pool.config.prefix) |p| p.len else 0;
 
         const meta = try allocator.alloc(u8, meta_len);
@@ -53,7 +58,6 @@ pub const LogFmt = struct {
 
         return .{
             .io = pool.io,
-            .allocator = allocator,
             .lvl = .None,
             .meta_base_len = meta_base_len,
             .meta = meta,
@@ -413,37 +417,40 @@ pub const LogFmt = struct {
             const meta_buf = meta[prefix_len..];
 
             @memcpy(meta_buf[0..4], "@ts=");
-            var tsEnd: usize = 17;
+            var ts_end: usize = 17;
             if (self.timestamp == Config.Timestamp.number) {
                 _ = std.fmt.printInt(meta_buf[4..], timestamp.nowMilliseconds(self.io), 10, .lower, .{});
-            } else {
-                tsEnd = 23;
-                @memcpy(meta_buf[4..23], try timestamp.nowFormatted(self.io, self.allocator, if (self.timestamp == Config.Timestamp.iso) .iso else .sql));
+            } else if (self.timestamp == Config.Timestamp.iso) {
+                ts_end = 24;
+                @memcpy(meta_buf[4..24], try timestamp.nowFormatted(self.io, .iso));
+            } else if (self.timestamp == Config.Timestamp.sql) {
+                ts_end = 23;
+                @memcpy(meta_buf[4..23], try timestamp.nowFormatted(self.io, .sql));
             }
 
             switch (self.lvl) {
                 .Debug => {
-                    @memcpy(meta_buf[tsEnd..], " @l=DEBUG ");
+                    @memcpy(meta_buf[ts_end..], " @l=DEBUG ");
                     break :blk meta.len;
                 },
                 .Info => {
-                    @memcpy(meta_buf[tsEnd .. self.meta_base_len - 1], " @l=INFO ");
+                    @memcpy(meta_buf[ts_end .. self.meta_base_len - 1], " @l=INFO ");
                     break :blk meta.len - 1;
                 },
                 .Warn => {
-                    @memcpy(meta_buf[tsEnd .. self.meta_base_len - 1], " @l=WARN ");
+                    @memcpy(meta_buf[ts_end .. self.meta_base_len - 1], " @l=WARN ");
                     break :blk meta.len - 1;
                 },
                 .Error => {
-                    @memcpy(meta_buf[tsEnd..], " @l=ERROR ");
+                    @memcpy(meta_buf[ts_end..], " @l=ERROR ");
                     break :blk meta.len;
                 },
                 .Fatal => {
-                    @memcpy(meta_buf[tsEnd..], " @l=FATAL ");
+                    @memcpy(meta_buf[ts_end..], " @l=FATAL ");
                     break :blk meta.len;
                 },
                 else => {
-                    meta_buf[tsEnd] = ' ';
+                    meta_buf[ts_end] = ' ';
                     break :blk meta.len - 9;
                 },
             }

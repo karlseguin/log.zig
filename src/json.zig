@@ -10,8 +10,8 @@ const Allocator = std.mem.Allocator;
 const b64 = std.base64.url_safe_no_pad.Encoder;
 
 const META_NUMBER_LEN = "{\"@ts\":9999999999999,\"@l\":\"ERROR\",".len;
-const META_ISO_LEN = "{\"@ts\"=\"9999-99-99T99:99:99Z\",\"@l\":\"ERROR\",".len;
-const META_SQL_LEN = "{\"@ts\"=\"9999-99-99 99:99:99\",\"@l\":\"ERROR\",".len;
+const META_ISO_LEN = "{\"@ts\"=\"9999-99-99T99:99:99.999999Z\",\"@l\":\"ERROR\",".len;
+const META_SQL_LEN = "{\"@ts\"=\"9999-99-99 99:99:99.999999\",\"@l\":\"ERROR\",".len;
 
 const t = @import("t.zig");
 const timestamp = @import("timestamp.zig");
@@ -478,15 +478,15 @@ pub const Json = struct {
             if (self.timestamp == Config.Timestamp.number) {
                 _ = std.fmt.printInt(meta_buf[7..], timestamp.nowMilliseconds(self.io), 10, .lower, .{});
             } else if (self.timestamp == Config.Timestamp.iso) {
-                ts_end = 29;
+                ts_end = 36;
                 @memcpy(meta_buf[7..8], "\"");
-                @memcpy(meta_buf[8..28], try timestamp.nowFormatted(self.io, .iso));
-                @memcpy(meta_buf[28..29], "\"");
+                @memcpy(meta_buf[8..35], try timestamp.nowFormatted(self.io, .iso));
+                @memcpy(meta_buf[35..36], "\"");
             } else if (self.timestamp == Config.Timestamp.sql) {
-                ts_end = 28;
+                ts_end = 35;
                 @memcpy(meta_buf[7..8], "\"");
-                @memcpy(meta_buf[8..27], try timestamp.nowFormatted(self.io, .sql));
-                @memcpy(meta_buf[27..28], "\"");
+                @memcpy(meta_buf[8..34], try timestamp.nowFormatted(self.io, .sql));
+                @memcpy(meta_buf[34..35], "\"");
             }
 
             switch (self.lvl) {

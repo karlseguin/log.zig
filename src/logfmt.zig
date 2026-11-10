@@ -10,8 +10,8 @@ const Allocator = std.mem.Allocator;
 const b64 = std.base64.url_safe_no_pad.Encoder;
 
 const META_NUMBER_LEN = "@ts=9999999999999 @L=ERROR ".len;
-const META_ISO_LEN = "@ts=9999-99-99T99:99:99Z @L=ERROR ".len;
-const META_SQL_LEN = "@ts=9999-99-99 99:99:99 @L=ERROR ".len;
+const META_ISO_LEN = "@ts=9999-99-99T99:99:99.999999Z @L=ERROR ".len;
+const META_SQL_LEN = "@ts=9999-99-99 99:99:99.999999 @L=ERROR ".len;
 
 const t = @import("t.zig");
 const timestamp = @import("timestamp.zig");
@@ -421,11 +421,11 @@ pub const LogFmt = struct {
             if (self.timestamp == Config.Timestamp.number) {
                 _ = std.fmt.printInt(meta_buf[4..], timestamp.nowMilliseconds(self.io), 10, .lower, .{});
             } else if (self.timestamp == Config.Timestamp.iso) {
-                ts_end = 24;
-                @memcpy(meta_buf[4..24], try timestamp.nowFormatted(self.io, .iso));
+                ts_end = 31;
+                @memcpy(meta_buf[4..31], try timestamp.nowFormatted(self.io, .iso));
             } else if (self.timestamp == Config.Timestamp.sql) {
-                ts_end = 23;
-                @memcpy(meta_buf[4..23], try timestamp.nowFormatted(self.io, .sql));
+                ts_end = 30;
+                @memcpy(meta_buf[4..30], try timestamp.nowFormatted(self.io, .sql));
             }
 
             switch (self.lvl) {

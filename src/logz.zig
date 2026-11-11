@@ -21,7 +21,7 @@ pub fn setLevel(l: Level) void {
     if (@import("builtin").is_test == false) {
         @compileError("logz.setLevel can only be called during testing");
     }
-    global.level = @intFromEnum(l);
+    global.level = @backingInt(l);
 }
 
 pub fn writeMetrics(writer: anytype) !void {
@@ -286,7 +286,7 @@ pub const Logger = struct {
 pub const noop = Logger{ .pool = undefined, .inner = .{ .noop = {} } };
 
 pub fn level() Level {
-    return @enumFromInt(global.level);
+    return @fromBackingInt(@intCast(global.level));
 }
 
 pub fn newLogger() !Logger {

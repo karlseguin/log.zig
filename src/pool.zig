@@ -74,7 +74,7 @@ pub const Pool = struct {
             .allocator = allocator,
             .buffer_pool = buffer_pool,
             .strategy = config.pool_strategy,
-            .level = @intFromEnum(config.level),
+            .level = @backingInt(config.level),
             .writer = undefined,
         };
 
@@ -184,7 +184,7 @@ pub const Pool = struct {
     }
 
     pub fn logger(self: *Pool) Logger {
-        if (self.level == @intFromEnum(logz.Level.None)) return logz.noop;
+        if (self.level == @backingInt(logz.Level.None)) return logz.noop;
         return self.acquire();
     }
 
@@ -195,7 +195,7 @@ pub const Pool = struct {
     }
 
     pub fn shouldLog(self: *Pool, level: logz.Level) bool {
-        return @intFromEnum(level) >= self.level;
+        return @backingInt(level) >= self.level;
     }
 
     fn loggerWithLevel(self: *Pool, lvl: logz.Level) Logger {
@@ -943,4 +943,60 @@ test "pool: file out" {
     //         \\
     //     , data);
     // }
+}
+
+test "pool: logfmt iso and sql timestamp" {
+    var out: std.Io.Writer.Allocating = .init(t.allocator);
+    defer out.deinit();
+
+    const prefixes = [_]?[]const u8{ null, "keemun " };
+    inline for (.{ .iso, .sql }, .{ "2286-11-20T17:46:39.999000Z", "2286-11-20 17:46:39.999000" }) |timestamp, ts| {
+        for (prefixes) |prefix| {
+            var p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .buffer_size = 100, .level = .Debug, .timestamp = timestamp, .prefix = prefix });
+            defer p.deinit();
+
+            const start = try std.fmt.allocPrint(t.allocator, "{s}@ts=" ++ ts, .{prefix orelse ""});
+            defer t.allocator.free(start);
+
+            inline for (.{ .Debug, .Info, .Warn, .Error, .Fatal }, .{ "DEBUG", "INFO", "WARN", "ERROR", "FATAL" }) |level, name| {
+                out.clearRetainingCapacity();
+                try p.loggerL(level).int("a", 1).logTo(&out.writer);
+                try t.expectPrefix(out.written(), start);
+                try t.expectString(" @l=" ++ name ++ " a=1\n", out.written()[start.len..]);
+            }
+
+            out.clearRetainingCapacity();
+            try p.logger().int("a", 1).logTo(&out.writer);
+            try t.expectPrefix(out.written(), start);
+            try t.expectString(" a=1\n", out.written()[start.len..]);
+        }
+    }
+}
+
+test "pool: json iso and sql timestamp" {
+    var out: std.Io.Writer.Allocating = .init(t.allocator);
+    defer out.deinit();
+
+    const prefixes = [_]?[]const u8{ null, "{\"x\": 1," };
+    inline for (.{ .iso, .sql }, .{ "2286-11-20T17:46:39.999000Z", "2286-11-20 17:46:39.999000" }) |timestamp, ts| {
+        for (prefixes) |prefix| {
+            var p = try Pool.init(t.io, t.allocator, .{ .pool_size = 1, .buffer_size = 100, .level = .Debug, .encoding = .json, .timestamp = timestamp, .prefix = prefix });
+            defer p.deinit();
+
+            const start = try std.fmt.allocPrint(t.allocator, "{s}{s}\"@ts\":\"" ++ ts ++ "\"", .{ prefix orelse "", if (prefix == null) "{" else " " });
+            defer t.allocator.free(start);
+
+            inline for (.{ .Debug, .Info, .Warn, .Error, .Fatal }, .{ "DEBUG", "INFO", "WARN", "ERROR", "FATAL" }) |level, name| {
+                out.clearRetainingCapacity();
+                try p.loggerL(level).int("a", 1).logTo(&out.writer);
+                try t.expectPrefix(out.written(), start);
+                try t.expectString(",\"@l\":\"" ++ name ++ "\",\"a\":1}\n", out.written()[start.len..]);
+            }
+
+            out.clearRetainingCapacity();
+            try p.logger().int("a", 1).logTo(&out.writer);
+            try t.expectPrefix(out.written(), start);
+            try t.expectString(",\"a\":1}\n", out.written()[start.len..]);
+        }
+    }
 }

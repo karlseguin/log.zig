@@ -370,7 +370,7 @@ pub const Pool = struct {
     large_buffer_size: usize,
     strategy: Config.LargeBufferStrategy,
 
-    pub fn init(io: Io,allocator: Allocator, config: *const Config) !Pool {
+    pub fn init(io: Io, allocator: Allocator, config: *const Config) !Pool {
         const large_buffer_size = config.large_buffer_size;
         const large_buffer_count = if (large_buffer_size == 0) 0 else config.large_buffer_count;
         const buffers = try allocator.alloc([]u8, large_buffer_count);

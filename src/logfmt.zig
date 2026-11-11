@@ -9,9 +9,8 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const b64 = std.base64.url_safe_no_pad.Encoder;
 
-const META_NUMBER_LEN = "@ts=9999999999999 @L=ERROR ".len;
-const META_ISO_LEN = "@ts=9999-99-99T99:99:99.999999Z @L=ERROR ".len;
-const META_SQL_LEN = "@ts=9999-99-99 99:99:99.999999 @L=ERROR ".len;
+// the meta fields, without the timestamp value, which depends on config.timestamp
+const META_LEN = "@ts= @l=ERROR ".len;
 
 const t = @import("t.zig");
 const timestamp = @import("timestamp.zig");
@@ -41,12 +40,7 @@ pub const LogFmt = struct {
         var buffer = try pool.buffer_pool.create();
         errdefer buffer.deinit();
 
-        var meta_base_len = META_NUMBER_LEN;
-        if (pool.config.timestamp == Config.Timestamp.iso) {
-            meta_base_len = META_ISO_LEN;
-        } else if (pool.config.timestamp == Config.Timestamp.sql) {
-            meta_base_len = META_SQL_LEN;
-        }
+        const meta_base_len = META_LEN + timestamp.len(pool.config.timestamp);
         const meta_len = meta_base_len + if (pool.config.prefix) |p| p.len else 0;
 
         const meta = try allocator.alloc(u8, meta_len);
@@ -417,16 +411,7 @@ pub const LogFmt = struct {
             const meta_buf = meta[prefix_len..];
 
             @memcpy(meta_buf[0..4], "@ts=");
-            var ts_end: usize = 17;
-            if (self.timestamp == Config.Timestamp.number) {
-                _ = std.fmt.printInt(meta_buf[4..], timestamp.nowMilliseconds(self.io), 10, .lower, .{});
-            } else if (self.timestamp == Config.Timestamp.iso) {
-                ts_end = 31;
-                @memcpy(meta_buf[4..31], try timestamp.nowFormatted(self.io, .iso));
-            } else if (self.timestamp == Config.Timestamp.sql) {
-                ts_end = 30;
-                @memcpy(meta_buf[4..30], try timestamp.nowFormatted(self.io, .sql));
-            }
+            const ts_end = 4 + timestamp.write(self.io, meta_buf[4..], self.timestamp);
 
             switch (self.lvl) {
                 .Debug => {

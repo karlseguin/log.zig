@@ -9,9 +9,8 @@ const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const b64 = std.base64.url_safe_no_pad.Encoder;
 
-const META_NUMBER_LEN = "{\"@ts\":9999999999999,\"@l\":\"ERROR\",".len;
-const META_ISO_LEN = "{\"@ts\"=\"9999-99-99T99:99:99.999999Z\",\"@l\":\"ERROR\",".len;
-const META_SQL_LEN = "{\"@ts\"=\"9999-99-99 99:99:99.999999\",\"@l\":\"ERROR\",".len;
+// the meta fields, without the timestamp value, which depends on config.timestamp
+const META_LEN = "{\"@ts\":,\"@l\":\"ERROR\",".len;
 
 const t = @import("t.zig");
 const timestamp = @import("timestamp.zig");
@@ -43,12 +42,10 @@ pub const Json = struct {
         var buffer = try pool.buffer_pool.create();
         errdefer buffer.deinit();
 
-        var meta_base_len = META_NUMBER_LEN;
-        if (pool.config.timestamp == Config.Timestamp.iso) {
-            meta_base_len = META_ISO_LEN;
-        } else if (pool.config.timestamp == Config.Timestamp.sql) {
-            meta_base_len = META_SQL_LEN;
-        }
+        const meta_base_len = META_LEN + timestamp.len(pool.config.timestamp) + switch (pool.config.timestamp) {
+            .number => @as(usize, 0),
+            .iso, .sql => 2, // quoted
+        };
         const meta_len = meta_base_len + if (pool.config.prefix) |p| p.len else 0;
 
         const meta = try allocator.alloc(u8, meta_len);
@@ -474,20 +471,15 @@ pub const Json = struct {
                 @memcpy(meta_buf[0..7], " \"@ts\":");
             }
 
-            var ts_end: usize = 20;
-            if (self.timestamp == Config.Timestamp.number) {
-                _ = std.fmt.printInt(meta_buf[7..], timestamp.nowMilliseconds(self.io), 10, .lower, .{});
-            } else if (self.timestamp == Config.Timestamp.iso) {
-                ts_end = 36;
-                @memcpy(meta_buf[7..8], "\"");
-                @memcpy(meta_buf[8..35], try timestamp.nowFormatted(self.io, .iso));
-                @memcpy(meta_buf[35..36], "\"");
-            } else if (self.timestamp == Config.Timestamp.sql) {
-                ts_end = 35;
-                @memcpy(meta_buf[7..8], "\"");
-                @memcpy(meta_buf[8..34], try timestamp.nowFormatted(self.io, .sql));
-                @memcpy(meta_buf[34..35], "\"");
-            }
+            const ts_end = switch (self.timestamp) {
+                .number => 7 + timestamp.write(self.io, meta_buf[7..], .number),
+                .iso, .sql => |format| ts: {
+                    meta_buf[7] = '"';
+                    const end = 8 + timestamp.write(self.io, meta_buf[8..], format);
+                    meta_buf[end] = '"';
+                    break :ts end + 1;
+                },
+            };
 
             switch (self.lvl) {
                 .Debug => {
